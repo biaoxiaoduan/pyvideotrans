@@ -7,6 +7,7 @@ if __name__ == '__main__':
     import shutil
     import threading
     import time
+    from datetime import datetime
     from pathlib import Path
 
     from flask import Flask, request, jsonify, render_template_string, send_from_directory, redirect, url_for
@@ -341,6 +342,8 @@ if __name__ == '__main__':
                 <h3 style=\"margin:0;\">字幕查看器</h3>
                 <div class=\"task\">任务: {task_id}</div>
                 <div style=\"margin-left:auto; display:flex; gap:8px; align-items:center;\">
+                    <button id=\"btnTranslateSubtitle\" style=\"padding:6px 12px; border:1px solid #9c27b0; background:#9c27b0; color:#fff; border-radius:6px; cursor:pointer;\">翻译字幕</button>
+                    <button id=\"btnSaveTranslation\" style=\"padding:6px 12px; border:1px solid #17a2b8; background:#17a2b8; color:#fff; border-radius:6px; cursor:pointer; display:none;\">保存翻译</button>
                     <button id=\"btnGenerateTTS\" style=\"padding:6px 12px; border:1px solid #28a745; background:#28a745; color:#fff; border-radius:6px; cursor:pointer;\">生成TTS音频</button>
                     <button id=\"btnSynthesizeVideo\" style=\"padding:6px 12px; border:1px solid #ff6b35; background:#ff6b35; color:#fff; border-radius:6px; cursor:pointer;\">合成视频</button>
                     <button id=\"btnVoiceDubbing\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">智能配音</button>
@@ -364,6 +367,8 @@ if __name__ == '__main__':
             const videoEl = document.getElementById('video');
             const canvas = document.getElementById('timeline');
             const ctx = canvas.getContext('2d');
+            const btnTranslateSubtitle = document.getElementById('btnTranslateSubtitle');
+            const btnSaveTranslation = document.getElementById('btnSaveTranslation');
             const btnGenerateTTS = document.getElementById('btnGenerateTTS');
             const btnSynthesizeVideo = document.getElementById('btnSynthesizeVideo');
             const btnSaveSrt = document.getElementById('btnSaveSrt');
@@ -408,6 +413,42 @@ if __name__ == '__main__':
                     content.value = c.text || '';
                     content.addEventListener('input', () => { c.text = content.value; });
                     tx.appendChild(sel); tx.appendChild(content);
+                    
+                    // 如果有翻译后的字幕，显示在下面并支持编辑
+                    if (c.translated_text) {
+                        const translatedDiv = document.createElement('div');
+                        translatedDiv.style.marginTop = '4px';
+                        translatedDiv.style.padding = '4px 8px';
+                        translatedDiv.style.backgroundColor = '#f0f8ff';
+                        translatedDiv.style.border = '1px solid #b3d9ff';
+                        translatedDiv.style.borderRadius = '4px';
+                        translatedDiv.style.fontSize = '13px';
+                        translatedDiv.style.color = '#0066cc';
+                        
+                        // 创建翻译标签
+                        const translatedLabel = document.createElement('div');
+                        translatedLabel.style.marginBottom = '4px';
+                        translatedLabel.innerHTML = '<strong>翻译:</strong>';
+                        
+                        // 创建可编辑的翻译文本框
+                        const translatedInput = document.createElement('textarea');
+                        translatedInput.value = c.translated_text;
+                        translatedInput.style.width = '100%';
+                        translatedInput.style.minHeight = '40px';
+                        translatedInput.style.padding = '4px';
+                        translatedInput.style.border = '1px solid #ccc';
+                        translatedInput.style.borderRadius = '3px';
+                        translatedInput.style.fontSize = '12px';
+                        translatedInput.style.resize = 'vertical';
+                        translatedInput.addEventListener('input', () => { 
+                            c.translated_text = translatedInput.value; 
+                        });
+                        
+                        translatedDiv.appendChild(translatedLabel);
+                        translatedDiv.appendChild(translatedInput);
+                        tx.appendChild(translatedDiv);
+                    }
+                    
                     item.appendChild(t); item.appendChild(tx);
                     item.addEventListener('click', () => {
                         videoEl.currentTime = (c.start || 0) / 1000;
@@ -681,6 +722,216 @@ if __name__ == '__main__':
                 }
             }
 
+            async function onTranslateSubtitle() {
+                try {
+                    if (!cues || cues.length === 0) {
+                        alert('没有字幕数据，无法进行翻译');
+                        return;
+                    }
+                    
+                    // 创建语言选择对话框
+                    const languageOptions = [
+                        { code: 'en', name: '英语' },
+                        { code: 'fr', name: '法语' },
+                        { code: 'ja', name: '日语' },
+                        { code: 'zh-cn', name: '汉语' },
+                        { code: 'es', name: '西班牙语' },
+                        { code: 'pt', name: '葡萄牙语' },
+                        { code: 'th', name: '泰语' }
+                    ];
+                    
+                    // 创建对话框HTML
+                    const dialogHtml = `
+                        <div id="translateDialog" style="
+                            position: fixed;
+                            top: 0;
+                            left: 0;
+                            width: 100%;
+                            height: 100%;
+                            background: rgba(0,0,0,0.5);
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            z-index: 1000;
+                        ">
+                            <div style="
+                                background: white;
+                                padding: 24px;
+                                border-radius: 8px;
+                                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                                min-width: 300px;
+                            ">
+                                <h3 style="margin: 0 0 16px 0;">选择翻译语言</h3>
+                                <select id="targetLanguage" style="
+                                    width: 100%;
+                                    padding: 8px;
+                                    border: 1px solid #ddd;
+                                    border-radius: 4px;
+                                    margin-bottom: 16px;
+                                ">
+                                    ${languageOptions.map(opt => `<option value="${opt.code}">${opt.name}</option>`).join('')}
+                                </select>
+                                <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                                    <button id="cancelTranslate" style="
+                                        padding: 8px 16px;
+                                        border: 1px solid #ddd;
+                                        background: white;
+                                        border-radius: 4px;
+                                        cursor: pointer;
+                                    ">取消</button>
+                                    <button id="confirmTranslate" style="
+                                        padding: 8px 16px;
+                                        border: none;
+                                        background: #9c27b0;
+                                        color: white;
+                                        border-radius: 4px;
+                                        cursor: pointer;
+                                    ">开始翻译</button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    // 添加对话框到页面
+                    document.body.insertAdjacentHTML('beforeend', dialogHtml);
+                    
+                    const dialog = document.getElementById('translateDialog');
+                    const cancelBtn = document.getElementById('cancelTranslate');
+                    const confirmBtn = document.getElementById('confirmTranslate');
+                    const targetLanguageSelect = document.getElementById('targetLanguage');
+                    
+                    // 取消按钮事件
+                    cancelBtn.addEventListener('click', () => {
+                        document.body.removeChild(dialog);
+                    });
+                    
+                    // 确认按钮事件
+                    confirmBtn.addEventListener('click', async () => {
+                        const targetLanguage = targetLanguageSelect.value;
+                        document.body.removeChild(dialog);
+                        
+                        // 显示进度提示
+                        btnTranslateSubtitle.textContent = '翻译中...';
+                        btnTranslateSubtitle.disabled = true;
+                        
+                        try {
+                            // 准备翻译请求数据
+                            const payload = {
+                                subtitles: cues.map((c, index) => ({
+                                    line: index + 1,
+                                    start_time: Number(c.start) || 0,
+                                    end_time: Number(c.end) || 0,
+                                    startraw: c.startraw || '',
+                                    endraw: c.endraw || '',
+                                    time: `${c.startraw || ''} --> ${c.endraw || ''}`,
+                                    text: String(c.text || '').trim(),
+                                    speaker: String(c.speaker || '').trim(),
+                                })),
+                                target_language: targetLanguage,
+                                translate_type: 0  // 使用Google翻译
+                            };
+                            
+                            console.log('发送翻译请求数据:', payload);
+                            
+                            const res = await fetch(`/viewer_api/${taskId}/translate_subtitles`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(payload)
+                            });
+                            const data = await res.json();
+                            
+                            if (data && data.code === 0) {
+                                // 将翻译结果添加到字幕数据中
+                                if (data.translated_subtitles && data.translated_subtitles.length > 0) {
+                                    data.translated_subtitles.forEach((translated, index) => {
+                                        if (cues[index]) {
+                                            cues[index].translated_text = translated.text;
+                                        }
+                                    });
+                                    // 重新渲染列表
+                                    renderList();
+                                    // 显示保存翻译按钮
+                                    btnSaveTranslation.style.display = 'inline-block';
+                                    alert('翻译完成！您可以编辑翻译结果，然后点击"保存翻译"按钮保存。');
+                                } else {
+                                    alert('翻译失败：没有返回翻译结果');
+                                }
+                            } else {
+                                alert(data && data.msg ? data.msg : '翻译失败');
+                            }
+                        } catch (e) {
+                            console.error(e);
+                            alert('翻译失败');
+                        } finally {
+                            // 恢复按钮状态
+                            btnTranslateSubtitle.textContent = '翻译字幕';
+                            btnTranslateSubtitle.disabled = false;
+                        }
+                    });
+                    
+                } catch (e) {
+                    console.error(e);
+                    alert('翻译启动失败');
+                }
+            }
+
+            // 保存翻译结果功能
+            async function onSaveTranslation() {
+                try {
+                    if (!cues || cues.length === 0) {
+                        alert('没有字幕数据');
+                        return;
+                    }
+                    
+                    // 检查是否有翻译内容
+                    const hasTranslation = cues.some(c => c.translated_text && c.translated_text.trim());
+                    if (!hasTranslation) {
+                        alert('没有翻译内容需要保存');
+                        return;
+                    }
+                    
+                    btnSaveTranslation.textContent = '保存中...';
+                    btnSaveTranslation.disabled = true;
+                    
+                    // 准备保存数据
+                    const saveData = {
+                        subtitles: cues.map((c, index) => ({
+                            line: index + 1,
+                            start_time: Number(c.start) || 0,
+                            end_time: Number(c.end) || 0,
+                            startraw: c.startraw || '',
+                            endraw: c.endraw || '',
+                            time: `${c.startraw || ''} --> ${c.endraw || ''}`,
+                            text: String(c.text || '').trim(),
+                            translated_text: String(c.translated_text || '').trim(),
+                            speaker: String(c.speaker || '').trim(),
+                        }))
+                    };
+                    
+                    const res = await fetch(`/viewer_api/${taskId}/save_translation`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(saveData)
+                    });
+                    const data = await res.json();
+                    
+                    if (data && data.code === 0) {
+                        alert('翻译结果保存成功！');
+                        btnSaveTranslation.style.display = 'none';
+                    } else {
+                        alert(data && data.msg ? data.msg : '保存失败');
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('保存失败');
+                } finally {
+                    btnSaveTranslation.textContent = '保存翻译';
+                    btnSaveTranslation.disabled = false;
+                }
+            }
+
+            btnTranslateSubtitle.addEventListener('click', onTranslateSubtitle);
+            btnSaveTranslation.addEventListener('click', onSaveTranslation);
             btnGenerateTTS.addEventListener('click', onGenerateTTS);
             btnSynthesizeVideo.addEventListener('click', onSynthesizeVideo);
             btnVoiceDubbing.addEventListener('click', onVoiceDubbing);
@@ -1027,6 +1278,156 @@ if __name__ == '__main__':
 
         except Exception as e:
             return jsonify({"code": 1, "msg": f"启动配音失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/translate_subtitles', methods=['POST'])
+    def viewer_translate_subtitles(task_id):
+        """翻译字幕接口 - 将字幕翻译为指定语言"""
+        data = request.json
+        if not data or 'subtitles' not in data or 'target_language' not in data:
+            return jsonify({"code": 1, "msg": "缺少字幕数据或目标语言"}), 400
+
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+
+        try:
+            from videotrans import translator
+            from videotrans.configure import config as _config
+            
+            # 设置翻译状态，确保翻译器不会提前退出
+            original_status = _config.current_status
+            original_box_trans = _config.box_trans
+            _config.current_status = 'ing'
+            _config.box_trans = 'ing'
+            
+            try:
+                # 获取翻译参数
+                subtitles = data['subtitles']
+                target_language = data['target_language']
+                translate_type = data.get('translate_type', 0)  # 默认使用Google翻译
+                
+                # 准备翻译数据 - 翻译器期望的是包含字典的列表，每个字典有text字段
+                text_list = []
+                for subtitle in subtitles:
+                    text = subtitle.get('text', '').strip()
+                    if text:
+                        text_list.append({'text': text})
+                
+                if not text_list:
+                    return jsonify({"code": 1, "msg": "没有可翻译的文本内容"}), 400
+                
+                print(f"开始翻译 {len(text_list)} 条字幕到 {target_language}")
+                print(f"翻译数据示例: {text_list[:2] if text_list else 'None'}")
+                
+                # 调用翻译功能
+                translated_texts = translator.run(
+                    translate_type=translate_type,
+                    text_list=text_list,
+                    target_code=target_language,
+                    source_code='zh-cn'  # 假设源语言是中文
+                )
+                
+                print(f"翻译结果类型: {type(translated_texts)}")
+                print(f"翻译结果长度: {len(translated_texts) if translated_texts else 0}")
+                print(f"翻译结果示例: {translated_texts[:2] if translated_texts else 'None'}")
+                
+                if not translated_texts:
+                    return jsonify({"code": 1, "msg": "翻译失败"}), 500
+                
+                # 翻译器返回的是修改后的text_list，每个元素包含翻译后的text字段
+                # 构建返回结果
+                translated_subtitles = []
+                for i, subtitle in enumerate(subtitles):
+                    translated_subtitle = subtitle.copy()
+                    # 从翻译结果中获取对应的翻译文本
+                    if i < len(translated_texts) and isinstance(translated_texts[i], dict):
+                        translated_subtitle['text'] = translated_texts[i].get('text', subtitle['text'])
+                    else:
+                        translated_subtitle['text'] = subtitle['text']
+                    translated_subtitles.append(translated_subtitle)
+                
+                return jsonify({
+                    "code": 0,
+                    "msg": "翻译完成",
+                    "translated_subtitles": translated_subtitles
+                })
+                
+            finally:
+                # 恢复原始状态
+                _config.current_status = original_status
+                _config.box_trans = original_box_trans
+            
+        except Exception as e:
+            print(f"翻译失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"code": 1, "msg": f"翻译失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/save_translation', methods=['POST'])
+    def viewer_save_translation(task_id):
+        """保存翻译结果接口"""
+        data = request.json
+        if not data or 'subtitles' not in data:
+            return jsonify({"code": 1, "msg": "缺少字幕数据"}), 400
+
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+
+        try:
+            subtitles = data['subtitles']
+            
+            # 创建翻译后的SRT文件
+            srt_content = ""
+            for subtitle in subtitles:
+                line_num = subtitle.get('line', 0)
+                start_time = subtitle.get('startraw', '')
+                end_time = subtitle.get('endraw', '')
+                original_text = subtitle.get('text', '').strip()
+                translated_text = subtitle.get('translated_text', '').strip()
+                speaker = subtitle.get('speaker', '').strip()
+                
+                # 如果有翻译内容，使用翻译内容；否则使用原文
+                display_text = translated_text if translated_text else original_text
+                
+                # 如果有说话人信息，添加到文本中
+                if speaker:
+                    display_text = f"[{speaker}] {display_text}"
+                
+                srt_content += f"{line_num}\n"
+                srt_content += f"{start_time} --> {end_time}\n"
+                srt_content += f"{display_text}\n\n"
+            
+            # 保存翻译后的SRT文件
+            translated_srt_path = task_dir / f"{task_id}_translated.srt"
+            with open(translated_srt_path, 'w', encoding='utf-8') as f:
+                f.write(srt_content)
+            
+            # 同时保存JSON格式的翻译结果
+            translation_data = {
+                "task_id": task_id,
+                "original_subtitles": subtitles,
+                "translation_timestamp": datetime.now().isoformat()
+            }
+            translation_json_path = task_dir / f"{task_id}_translation.json"
+            with open(translation_json_path, 'w', encoding='utf-8') as f:
+                json.dump(translation_data, f, ensure_ascii=False, indent=2)
+            
+            print(f"翻译结果已保存: {translated_srt_path}")
+            print(f"翻译数据已保存: {translation_json_path}")
+            
+            return jsonify({
+                "code": 0,
+                "msg": "翻译结果保存成功",
+                "srt_file": str(translated_srt_path),
+                "json_file": str(translation_json_path)
+            })
+            
+        except Exception as e:
+            print(f"保存翻译结果失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"code": 1, "msg": f"保存失败: {str(e)}"}), 500
 
     def start_video_synthesis_task(task_id, video_path, subtitles):
         """启动视频合成任务的后台处理函数"""
