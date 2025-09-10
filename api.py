@@ -344,7 +344,8 @@ if __name__ == '__main__':
                 <div style=\"margin-left:auto; display:flex; gap:8px; align-items:center;\">
                     <button id=\"btnTranslateSubtitle\" style=\"padding:6px 12px; border:1px solid #9c27b0; background:#9c27b0; color:#fff; border-radius:6px; cursor:pointer;\">翻译字幕</button>
                     <button id=\"btnSaveTranslation\" style=\"padding:6px 12px; border:1px solid #17a2b8; background:#17a2b8; color:#fff; border-radius:6px; cursor:pointer; display:none;\">保存翻译</button>
-                    <button id=\"btnGenerateTTS\" style=\"padding:6px 12px; border:1px solid #28a745; background:#28a745; color:#fff; border-radius:6px; cursor:pointer;\">生成TTS音频</button>
+                    <button id=\"btnVoiceClone\" style=\"padding:6px 12px; border:1px solid #e91e63; background:#e91e63; color:#fff; border-radius:6px; cursor:pointer;\">语音克隆</button>
+                    <button id=\"btnGenerateAudio\" style=\"padding:6px 12px; border:1px solid #ff9800; background:#ff9800; color:#fff; border-radius:6px; cursor:pointer; display:none;\">生成音频</button>
                     <button id=\"btnSynthesizeVideo\" style=\"padding:6px 12px; border:1px solid #ff6b35; background:#ff6b35; color:#fff; border-radius:6px; cursor:pointer;\">合成视频</button>
                     <button id=\"btnVoiceDubbing\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">智能配音</button>
                     <button id=\"btnSaveSrt\" style=\"padding:6px 12px; border:1px solid #ddd; background:#fff; border-radius:6px; cursor:pointer;\">下载SRT(含spk)</button>
@@ -369,7 +370,8 @@ if __name__ == '__main__':
             const ctx = canvas.getContext('2d');
             const btnTranslateSubtitle = document.getElementById('btnTranslateSubtitle');
             const btnSaveTranslation = document.getElementById('btnSaveTranslation');
-            const btnGenerateTTS = document.getElementById('btnGenerateTTS');
+            const btnVoiceClone = document.getElementById('btnVoiceClone');
+            const btnGenerateAudio = document.getElementById('btnGenerateAudio');
             const btnSynthesizeVideo = document.getElementById('btnSynthesizeVideo');
             const btnSaveSrt = document.getElementById('btnSaveSrt');
             const btnSaveJson = document.getElementById('btnSaveJson');
@@ -852,6 +854,12 @@ if __name__ == '__main__':
                                     renderList();
                                     // 显示保存翻译按钮
                                     btnSaveTranslation.style.display = 'inline-block';
+                                    // 检查是否有语音克隆映射，如果有则显示生成音频按钮
+                                    checkVoiceMapping().then(hasMapping => {
+                                        if (hasMapping) {
+                                            btnGenerateAudio.style.display = 'inline-block';
+                                        }
+                                    });
                                     alert('翻译完成！您可以编辑翻译结果，然后点击"保存翻译"按钮保存。');
                                 } else {
                                     alert('翻译失败：没有返回翻译结果');
@@ -930,9 +938,163 @@ if __name__ == '__main__':
                 }
             }
 
+            // 语音克隆功能
+            async function onVoiceClone() {
+                try {
+                    if (!cues || cues.length === 0) {
+                        alert('没有字幕数据');
+                        return;
+                    }
+                    
+                    // 检查是否有说话人信息
+                    const speakers = [...new Set(cues.map(c => c.speaker).filter(s => s && s.trim()))];
+                    if (speakers.length === 0) {
+                        alert('没有检测到说话人信息，无法进行语音克隆');
+                        return;
+                    }
+                    
+                    // 显示说话人信息确认对话框
+                    const speakerList = speakers.map(s => `<li>${s}</li>`).join('');
+                    const confirmMessage = `检测到以下说话人，将为他们创建语音克隆：\n\n${speakers.join(', ')}\n\n是否继续？`;
+                    
+                    if (!confirm(confirmMessage)) {
+                        return;
+                    }
+                    
+                    btnVoiceClone.textContent = '语音克隆中...';
+                    btnVoiceClone.disabled = true;
+                    
+                    // 准备语音克隆请求数据
+                    const payload = {
+                        speakers: speakers,
+                        subtitles: cues.map((c, index) => ({
+                            line: index + 1,
+                            start_time: Number(c.start) || 0,
+                            end_time: Number(c.end) || 0,
+                            startraw: c.startraw || '',
+                            endraw: c.endraw || '',
+                            time: `${c.startraw || ''} --> ${c.endraw || ''}`,
+                            text: String(c.text || '').trim(),
+                            speaker: String(c.speaker || '').trim(),
+                        }))
+                    };
+                    
+                    console.log('发送语音克隆请求数据:', payload);
+                    
+                    const res = await fetch(`/viewer_api/${taskId}/voice_clone`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await res.json();
+                    
+                    if (data && data.code === 0) {
+                        if (data.voice_clones && data.voice_clones.length > 0) {
+                            alert(`语音克隆完成！成功为 ${data.voice_clones.length} 个说话人创建了语音克隆。`);
+                            console.log('语音克隆结果:', data.voice_clones);
+                            // 显示生成音频按钮
+                            btnGenerateAudio.style.display = 'inline-block';
+                        } else {
+                            alert('语音克隆失败：没有返回克隆结果');
+                        }
+                    } else {
+                        alert(data && data.msg ? data.msg : '语音克隆失败');
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('语音克隆失败');
+                } finally {
+                    btnVoiceClone.textContent = '语音克隆';
+                    btnVoiceClone.disabled = false;
+                }
+            }
+
+            // 生成音频功能
+            async function onGenerateAudio() {
+                try {
+                    if (!cues || cues.length === 0) {
+                        alert('没有字幕数据');
+                        return;
+                    }
+                    
+                    // 检查是否有翻译内容
+                    const hasTranslation = cues.some(c => c.translated_text && c.translated_text.trim());
+                    if (!hasTranslation) {
+                        alert('没有翻译内容，请先进行字幕翻译');
+                        return;
+                    }
+                    
+                    // 检查是否有语音克隆映射
+                    const hasVoiceMapping = await checkVoiceMapping();
+                    if (!hasVoiceMapping) {
+                        alert('没有找到语音克隆映射，请先进行语音克隆');
+                        return;
+                    }
+                    
+                    // 确认生成音频
+                    const confirmMessage = `即将为 ${cues.length} 条翻译字幕生成音频，使用语音克隆技术。\n\n是否继续？`;
+                    if (!confirm(confirmMessage)) {
+                        return;
+                    }
+                    
+                    btnGenerateAudio.textContent = '生成音频中...';
+                    btnGenerateAudio.disabled = true;
+                    
+                    // 准备生成音频请求数据
+                    const payload = {
+                        subtitles: cues.map((c, index) => ({
+                            line: index + 1,
+                            start_time: Number(c.start) || 0,
+                            end_time: Number(c.end) || 0,
+                            startraw: c.startraw || '',
+                            endraw: c.endraw || '',
+                            time: `${c.startraw || ''} --> ${c.endraw || ''}`,
+                            text: String(c.text || '').trim(),
+                            translated_text: String(c.translated_text || '').trim(),
+                            speaker: String(c.speaker || '').trim(),
+                        }))
+                    };
+                    
+                    console.log('发送生成音频请求数据:', payload);
+                    
+                    const res = await fetch(`/viewer_api/${taskId}/generate_audio`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await res.json();
+                    
+                    if (data && data.code === 0) {
+                        alert(`音频生成完成！\n\n生成的文件：\n${data.audio_file}\n\n总时长：${data.duration || '未知'}`);
+                        console.log('音频生成结果:', data);
+                    } else {
+                        alert(data && data.msg ? data.msg : '音频生成失败');
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('音频生成失败');
+                } finally {
+                    btnGenerateAudio.textContent = '生成音频';
+                    btnGenerateAudio.disabled = false;
+                }
+            }
+
+            // 检查语音克隆映射是否存在
+            async function checkVoiceMapping() {
+                try {
+                    const res = await fetch(`/viewer_api/${taskId}/check_voice_mapping`);
+                    const data = await res.json();
+                    return data && data.code === 0 && data.has_mapping;
+                } catch (e) {
+                    console.error('检查语音映射失败:', e);
+                    return false;
+                }
+            }
+
             btnTranslateSubtitle.addEventListener('click', onTranslateSubtitle);
             btnSaveTranslation.addEventListener('click', onSaveTranslation);
-            btnGenerateTTS.addEventListener('click', onGenerateTTS);
+            btnVoiceClone.addEventListener('click', onVoiceClone);
+            btnGenerateAudio.addEventListener('click', onGenerateAudio);
             btnSynthesizeVideo.addEventListener('click', onSynthesizeVideo);
             btnVoiceDubbing.addEventListener('click', onVoiceDubbing);
             btnSaveSrt.addEventListener('click', onSaveSrt);
@@ -1428,6 +1590,481 @@ if __name__ == '__main__':
             import traceback
             traceback.print_exc()
             return jsonify({"code": 1, "msg": f"保存失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/voice_clone', methods=['POST'])
+    def viewer_voice_clone(task_id):
+        """语音克隆接口 - 使用ElevenLabs instant clone功能"""
+        data = request.json
+        if not data or 'speakers' not in data or 'subtitles' not in data:
+            return jsonify({"code": 1, "msg": "缺少说话人或字幕数据"}), 400
+
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+
+        try:
+            speakers = data['speakers']
+            subtitles = data['subtitles']
+            
+            # 检查ElevenLabs API密钥
+            if not config.params.get('elevenlabstts_key'):
+                return jsonify({"code": 1, "msg": "未配置ElevenLabs API密钥"}), 400
+            
+            print(f"开始为 {len(speakers)} 个说话人进行语音克隆: {speakers}")
+            
+            # 首先删除所有现有的自定义语音，避免达到限制
+            print("正在删除现有的自定义语音...")
+            delete_success = delete_all_custom_voices()
+            if not delete_success:
+                print("警告：删除现有语音失败，但继续尝试创建新语音")
+            
+            # 创建语音克隆结果存储
+            voice_clones = []
+            voice_mapping = {}
+            
+            # 为每个说话人创建语音克隆
+            for speaker in speakers:
+                try:
+                    print(f"正在为说话人 '{speaker}' 创建语音克隆...")
+                    
+                    # 获取该说话人的所有音频片段
+                    speaker_segments = [s for s in subtitles if s.get('speaker', '').strip() == speaker]
+                    if not speaker_segments:
+                        print(f"说话人 '{speaker}' 没有找到音频片段")
+                        continue
+                    
+                    # 提取该说话人的音频片段
+                    speaker_audio_path = extract_speaker_audio(task_dir, speaker, speaker_segments)
+                    if not speaker_audio_path:
+                        print(f"无法提取说话人 '{speaker}' 的音频")
+                        continue
+                    
+                    # 调用ElevenLabs instant clone API
+                    clone_result = create_voice_clone(speaker, speaker_audio_path)
+                    if clone_result:
+                        voice_clone_info = {
+                            "speaker": speaker,
+                            "voice_id": clone_result.get('voice_id'),
+                            "voice_name": clone_result.get('name'),
+                            "audio_segments_count": len(speaker_segments),
+                            "audio_file": str(speaker_audio_path)
+                        }
+                        voice_clones.append(voice_clone_info)
+                        voice_mapping[speaker] = clone_result.get('voice_id')
+                        print(f"说话人 '{speaker}' 语音克隆成功，voice_id: {clone_result.get('voice_id')}")
+                    else:
+                        print(f"说话人 '{speaker}' 语音克隆失败")
+                        
+                except Exception as e:
+                    print(f"为说话人 '{speaker}' 创建语音克隆时出错: {str(e)}")
+                    continue
+            
+            # 保存语音克隆映射关系
+            if voice_mapping:
+                mapping_file = task_dir / f"{task_id}_voice_mapping.json"
+                mapping_data = {
+                    "task_id": task_id,
+                    "voice_mapping": voice_mapping,
+                    "voice_clones": voice_clones,
+                    "created_at": datetime.now().isoformat()
+                }
+                with open(mapping_file, 'w', encoding='utf-8') as f:
+                    json.dump(mapping_data, f, ensure_ascii=False, indent=2)
+                print(f"语音克隆映射关系已保存: {mapping_file}")
+            
+            return jsonify({
+                "code": 0,
+                "msg": f"语音克隆完成，成功为 {len(voice_clones)} 个说话人创建了语音克隆",
+                "voice_clones": voice_clones,
+                "voice_mapping": voice_mapping
+            })
+            
+        except Exception as e:
+            print(f"语音克隆失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"code": 1, "msg": f"语音克隆失败: {str(e)}"}), 500
+
+    def extract_speaker_audio(task_dir, speaker, speaker_segments):
+        """提取指定说话人的音频片段"""
+        try:
+            from videotrans.util import tools
+            
+            # 创建说话人音频目录
+            speaker_dir = task_dir / "speaker_audio"
+            speaker_dir.mkdir(exist_ok=True)
+            
+            # 获取视频文件路径
+            video_files = list(task_dir.glob("*.mp4")) + list(task_dir.glob("*.avi")) + list(task_dir.glob("*.mov"))
+            if not video_files:
+                print("未找到视频文件")
+                return None
+            
+            video_path = video_files[0]
+            print(f"使用视频文件: {video_path}")
+            
+            # 首先提取原始音频
+            raw_audio_path = speaker_dir / f"{speaker}_raw_audio.wav"
+            if not raw_audio_path.exists():
+                print(f"正在提取原始音频: {raw_audio_path}")
+                tools.runffmpeg([
+                    '-y', '-i', str(video_path),
+                    '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
+                    str(raw_audio_path)
+                ])
+            
+            # 使用Demucs分离人声和背景音乐
+            vocals_path = speaker_dir / f"{speaker}_vocals.wav"
+            if not vocals_path.exists():
+                print(f"正在使用Demucs分离人声: {vocals_path}")
+                
+                # 使用Demucs分离人声
+                success = separate_voice_background_demucs(str(raw_audio_path), str(speaker_dir))
+                
+                if success:
+                    # Demucs生成的文件名是background.wav和vocal.wav
+                    demucs_vocal_path = speaker_dir / "vocal.wav"
+                    if demucs_vocal_path.exists():
+                        # 复制到我们期望的文件名
+                        import shutil
+                        shutil.copy2(demucs_vocal_path, vocals_path)
+                        print(f"Demucs人声分离成功: {vocals_path}")
+                    else:
+                        print("Demucs人声文件不存在，使用原始音频")
+                        import shutil
+                        shutil.copy2(raw_audio_path, vocals_path)
+                else:
+                    print("Demucs分离失败，使用原始音频")
+                    import shutil
+                    shutil.copy2(raw_audio_path, vocals_path)
+            
+            # 根据字幕时间戳切分说话人的音频片段
+            speaker_audio_path = speaker_dir / f"{speaker}_segments.wav"
+            if not speaker_audio_path.exists():
+                print(f"正在切分说话人 '{speaker}' 的音频片段...")
+                
+                # 合并该说话人的所有音频片段
+                segment_files = []
+                for i, segment in enumerate(speaker_segments):
+                    start_time = segment.get('start_time', 0) / 1000  # 转换为秒
+                    end_time = segment.get('end_time', 0) / 1000
+                    duration = end_time - start_time
+                    
+                    if duration > 0:
+                        segment_file = speaker_dir / f"{speaker}_segment_{i}.wav"
+                        tools.runffmpeg([
+                            '-y', '-i', str(vocals_path),
+                            '-ss', str(start_time), '-t', str(duration),
+                            '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
+                            str(segment_file)
+                        ])
+                        segment_files.append(str(segment_file))
+                
+                # 合并所有片段
+                if segment_files:
+                    concat_file = speaker_dir / f"{speaker}_concat.txt"
+                    with open(concat_file, 'w') as f:
+                        for seg_file in segment_files:
+                            f.write(f"file '{seg_file}'\n")
+                    
+                    tools.runffmpeg([
+                        '-y', '-f', 'concat', '-safe', '0', '-i', str(concat_file),
+                        '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
+                        str(speaker_audio_path)
+                    ])
+                    
+                    # 清理临时文件
+                    for seg_file in segment_files:
+                        Path(seg_file).unlink(missing_ok=True)
+                    concat_file.unlink(missing_ok=True)
+            
+            return speaker_audio_path if speaker_audio_path.exists() else None
+            
+        except Exception as e:
+            print(f"提取说话人音频失败: {str(e)}")
+            return None
+
+    def delete_all_custom_voices():
+        """删除所有自定义语音"""
+        try:
+            from elevenlabs import ElevenLabs
+            import httpx
+            
+            # 获取API密钥
+            api_key = config.params.get('elevenlabstts_key')
+            if not api_key:
+                raise Exception("ElevenLabs API密钥未配置")
+            
+            # 创建客户端
+            client = ElevenLabs(api_key=api_key, httpx_client=httpx.Client())
+            
+            # 获取所有语音
+            voices = client.voices.get_all()
+            custom_voices = [voice for voice in voices.voices if voice.category == 'cloned']
+            
+            print(f"找到 {len(custom_voices)} 个自定义语音，开始删除...")
+            
+            deleted_count = 0
+            for voice in custom_voices:
+                try:
+                    client.voices.delete(voice.voice_id)
+                    print(f"已删除语音: {voice.name} (ID: {voice.voice_id})")
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"删除语音失败 {voice.name}: {str(e)}")
+            
+            print(f"成功删除 {deleted_count} 个自定义语音")
+            return True
+            
+        except Exception as e:
+            print(f"删除自定义语音失败: {str(e)}")
+            return False
+
+    def create_voice_clone(speaker, audio_path):
+        """使用ElevenLabs instant clone API创建语音克隆"""
+        try:
+            from elevenlabs import ElevenLabs
+            import httpx
+            from io import BytesIO
+            
+            # 创建ElevenLabs客户端
+            client = ElevenLabs(
+                api_key=config.params['elevenlabstts_key'],
+                httpx_client=httpx.Client()
+            )
+            
+            # 读取音频文件
+            with open(audio_path, 'rb') as f:
+                audio_data = f.read()
+            
+            # 创建语音克隆
+            voice_name = f"{speaker}_clone_{int(time.time())}"
+            
+            # 使用instant voice cloning API
+            voice = client.voices.ivc.create(
+                name=voice_name,
+                files=[BytesIO(audio_data)]
+            )
+            
+            return {
+                "voice_id": voice.voice_id,
+                "name": voice_name,
+                "speaker": speaker
+            }
+            
+        except Exception as e:
+            print(f"创建语音克隆失败: {str(e)}")
+            return None
+
+    @app.route('/viewer_api/<task_id>/check_voice_mapping', methods=['GET'])
+    def viewer_check_voice_mapping(task_id):
+        """检查语音克隆映射是否存在"""
+        try:
+            task_dir = Path(TARGET_DIR) / task_id
+            if not task_dir.exists():
+                return jsonify({"code": 1, "msg": "任务不存在"}), 404
+            
+            mapping_file = task_dir / f"{task_id}_voice_mapping.json"
+            has_mapping = mapping_file.exists()
+            
+            return jsonify({
+                "code": 0,
+                "has_mapping": has_mapping,
+                "mapping_file": str(mapping_file) if has_mapping else None
+            })
+            
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"检查失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/generate_audio', methods=['POST'])
+    def viewer_generate_audio(task_id):
+        """生成音频接口 - 基于翻译字幕和语音克隆映射"""
+        data = request.json
+        if not data or 'subtitles' not in data:
+            return jsonify({"code": 1, "msg": "缺少字幕数据"}), 400
+
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+
+        try:
+            subtitles = data['subtitles']
+            
+            # 检查语音克隆映射文件
+            mapping_file = task_dir / f"{task_id}_voice_mapping.json"
+            if not mapping_file.exists():
+                return jsonify({"code": 1, "msg": "未找到语音克隆映射文件，请先进行语音克隆"}), 400
+            
+            # 读取语音克隆映射
+            with open(mapping_file, 'r', encoding='utf-8') as f:
+                mapping_data = json.load(f)
+            
+            voice_mapping = mapping_data.get('voice_mapping', {})
+            if not voice_mapping:
+                return jsonify({"code": 1, "msg": "语音克隆映射为空"}), 400
+            
+            print(f"开始生成音频，共 {len(subtitles)} 条字幕")
+            print(f"语音映射: {voice_mapping}")
+            
+            # 创建音频生成目录
+            audio_dir = task_dir / "generated_audio"
+            audio_dir.mkdir(exist_ok=True)
+            
+            # 为每条字幕生成TTS音频
+            generated_audio_files = []
+            total_duration = 0
+            
+            for i, subtitle in enumerate(subtitles):
+                try:
+                    speaker = subtitle.get('speaker', '').strip()
+                    translated_text = subtitle.get('translated_text', '').strip()
+                    start_time = subtitle.get('start_time', 0)
+                    end_time = subtitle.get('end_time', 0)
+                    duration = end_time - start_time
+                    
+                    if not translated_text:
+                        print(f"字幕 {i+1} 没有翻译内容，跳过")
+                        continue
+                    
+                    if not speaker or speaker not in voice_mapping:
+                        print(f"字幕 {i+1} 说话人 '{speaker}' 没有对应的语音克隆，跳过")
+                        continue
+                    
+                    voice_id = voice_mapping[speaker]
+                    print(f"为字幕 {i+1} 生成TTS: 说话人={speaker}, voice_id={voice_id}")
+                    
+                    # 生成TTS音频
+                    audio_file = audio_dir / f"segment_{i+1:04d}.wav"
+                    success = generate_tts_audio(translated_text, voice_id, audio_file)
+                    
+                    if success:
+                        generated_audio_files.append({
+                            "file": str(audio_file),
+                            "start_time": start_time,
+                            "end_time": end_time,
+                            "duration": duration,
+                            "speaker": speaker,
+                            "text": translated_text
+                        })
+                        total_duration = max(total_duration, end_time)
+                        print(f"字幕 {i+1} TTS生成成功: {audio_file}")
+                    else:
+                        print(f"字幕 {i+1} TTS生成失败")
+                        
+                except Exception as e:
+                    print(f"处理字幕 {i+1} 时出错: {str(e)}")
+                    continue
+            
+            if not generated_audio_files:
+                return jsonify({"code": 1, "msg": "没有成功生成任何音频片段"}), 500
+            
+            # 合成完整音频
+            final_audio_file = audio_dir / f"{task_id}_final_audio.wav"
+            success = synthesize_final_audio(generated_audio_files, final_audio_file, total_duration)
+            
+            if not success:
+                return jsonify({"code": 1, "msg": "音频合成失败"}), 500
+            
+            print(f"音频生成完成: {final_audio_file}")
+            print(f"总时长: {total_duration/1000:.2f}秒")
+            
+            return jsonify({
+                "code": 0,
+                "msg": f"音频生成完成，共生成 {len(generated_audio_files)} 个音频片段",
+                "audio_file": str(final_audio_file),
+                "duration": f"{total_duration/1000:.2f}秒",
+                "segments_count": len(generated_audio_files),
+                "generated_segments": generated_audio_files
+            })
+            
+        except Exception as e:
+            print(f"生成音频失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"code": 1, "msg": f"生成音频失败: {str(e)}"}), 500
+
+    def generate_tts_audio(text, voice_id, output_file):
+        """使用ElevenLabs生成TTS音频"""
+        try:
+            from elevenlabs import ElevenLabs
+            import httpx
+            
+            # 创建ElevenLabs客户端
+            client = ElevenLabs(
+                api_key=config.params['elevenlabstts_key'],
+                httpx_client=httpx.Client()
+            )
+            
+            # 生成TTS音频
+            audio = client.text_to_speech.convert(
+                voice_id=voice_id,
+                text=text,
+                model_id="eleven_flash_v2_5"
+            )
+            
+            # 保存音频文件
+            with open(output_file, 'wb') as f:
+                for chunk in audio:
+                    f.write(chunk)
+            
+            return True
+            
+        except Exception as e:
+            print(f"TTS生成失败: {str(e)}")
+            return False
+
+    def synthesize_final_audio(audio_segments, output_file, total_duration):
+        """合成最终音频文件"""
+        try:
+            from videotrans.util import tools
+            
+            # 创建静音文件作为基础 - 修复FFmpeg参数
+            silence_file = output_file.parent / "silence.wav"
+            tools.runffmpeg([
+                '-y', '-f', 'lavfi', '-i', f'anullsrc=channel_layout=stereo:sample_rate=44100:duration={total_duration/1000}',
+                '-ar', '44100', '-ac', '2', str(silence_file)
+            ])
+            
+            # 为每个音频片段创建覆盖命令
+            filter_complex = []
+            inputs = [str(silence_file)]
+            
+            for i, segment in enumerate(audio_segments):
+                start_time = segment['start_time'] / 1000  # 转换为秒
+                audio_file = segment['file']
+                
+                # 添加输入文件
+                inputs.extend(['-i', audio_file])
+                
+                # 添加覆盖滤镜
+                filter_complex.append(f"[{i+1}:a]adelay={int(start_time*1000)}|{int(start_time*1000)}[a{i+1}]")
+            
+            # 合并所有音频
+            mix_inputs = "[0:a]"
+            for i in range(len(audio_segments)):
+                mix_inputs += f"[a{i+1}]"
+            mix_inputs += f"amix=inputs={len(audio_segments)+1}:duration=longest[out]"
+            
+            filter_complex.append(mix_inputs)
+            
+            # 构建FFmpeg命令
+            cmd = ['-y'] + inputs + [
+                '-filter_complex', ';'.join(filter_complex),
+                '-map', '[out]',
+                '-ar', '44100', '-ac', '2', '-b:a', '128k',
+                str(output_file)
+            ]
+            
+            tools.runffmpeg(cmd)
+            
+            # 清理临时文件
+            silence_file.unlink(missing_ok=True)
+            
+            return output_file.exists()
+            
+        except Exception as e:
+            print(f"音频合成失败: {str(e)}")
+            return False
 
     def start_video_synthesis_task(task_id, video_path, subtitles):
         """启动视频合成任务的后台处理函数"""
