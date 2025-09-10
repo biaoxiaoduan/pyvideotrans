@@ -1,0 +1,32 @@
+# 简化的测试版本Dockerfile
+FROM python:3.11-slim
+
+# 设置工作目录
+WORKDIR /app
+
+# 设置环境变量
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# 安装基本依赖
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制requirements文件
+COPY requirements.txt .
+
+# 安装Python依赖（只安装核心依赖）
+RUN pip install --no-cache-dir flask waitress
+
+# 复制API文件
+COPY api.py .
+
+# 创建必要的目录
+RUN mkdir -p /app/logs /app/tmp /app/models /app/apidata
+
+# 暴露端口
+EXPOSE 9011
+
+# 启动命令
+CMD ["python", "api.py"]

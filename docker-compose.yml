@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  biaovideotrans-api:
+    build: .
+    container_name: biaovideotrans-api
+    ports:
+      - "9011:9011"
+    volumes:
+      # 挂载数据目录，持久化存储
+      - ./data:/app/apidata
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./tmp:/app/tmp
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9011/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # 如果需要GPU支持，取消下面的注释
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]

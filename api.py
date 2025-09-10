@@ -341,6 +341,8 @@ if __name__ == '__main__':
                 <h3 style=\"margin:0;\">字幕查看器</h3>
                 <div class=\"task\">任务: {task_id}</div>
                 <div style=\"margin-left:auto; display:flex; gap:8px; align-items:center;\">
+                    <button id=\"btnGenerateTTS\" style=\"padding:6px 12px; border:1px solid #28a745; background:#28a745; color:#fff; border-radius:6px; cursor:pointer;\">生成TTS音频</button>
+                    <button id=\"btnSynthesizeVideo\" style=\"padding:6px 12px; border:1px solid #ff6b35; background:#ff6b35; color:#fff; border-radius:6px; cursor:pointer;\">合成视频</button>
                     <button id=\"btnVoiceDubbing\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">智能配音</button>
                     <button id=\"btnSaveSrt\" style=\"padding:6px 12px; border:1px solid #ddd; background:#fff; border-radius:6px; cursor:pointer;\">下载SRT(含spk)</button>
                     <button id="btnSaveJson" style="padding:6px 12px; border:1px solid #ddd; background:#fff; border-radius:6px; cursor:pointer;">下载JSON</button>
@@ -362,6 +364,8 @@ if __name__ == '__main__':
             const videoEl = document.getElementById('video');
             const canvas = document.getElementById('timeline');
             const ctx = canvas.getContext('2d');
+            const btnGenerateTTS = document.getElementById('btnGenerateTTS');
+            const btnSynthesizeVideo = document.getElementById('btnSynthesizeVideo');
             const btnSaveSrt = document.getElementById('btnSaveSrt');
             const btnSaveJson = document.getElementById('btnSaveJson');
             let cues = [];
@@ -569,6 +573,116 @@ if __name__ == '__main__':
                 }
             }
 
+            async function onGenerateTTS() {
+                try {
+                    if (!cues || cues.length === 0) {
+                        alert('没有字幕数据，无法生成TTS音频');
+                        return;
+                    }
+                    
+                    const confirmed = confirm('开始生成TTS音频？这将根据字幕内容生成人声音频文件。');
+                    if (!confirmed) return;
+                    
+                    // 显示进度提示
+                    btnGenerateTTS.textContent = '生成中...';
+                    btnGenerateTTS.disabled = true;
+                    
+                    // 准备TTS请求数据
+                    const payload = { 
+                        subtitles: cues.map((c, index) => ({
+                            line: index + 1,
+                            start_time: Number(c.start) || 0,
+                            end_time: Number(c.end) || 0,
+                            startraw: c.startraw || '',
+                            endraw: c.endraw || '',
+                            time: `${c.startraw || ''} --> ${c.endraw || ''}`,
+                            text: String(c.text || '').trim(),
+                            speaker: String(c.speaker || '').trim(),
+                        }))
+                    };
+                    
+                    console.log('发送TTS生成请求数据:', payload);
+                    
+                    const res = await fetch(`/viewer_api/${taskId}/generate_tts`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await res.json();
+                    
+                    if (data && data.code === 0) {
+                        alert('TTS音频生成任务已启动，请稍后查看结果');
+                        // 可以跳转到任务状态页面
+                        window.open(`/tts_result/${data.task_id}`, '_blank');
+                    } else {
+                        alert(data && data.msg ? data.msg : 'TTS生成启动失败');
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('TTS生成启动失败');
+                } finally {
+                    // 恢复按钮状态
+                    btnGenerateTTS.textContent = '生成TTS音频';
+                    btnGenerateTTS.disabled = false;
+                }
+            }
+
+            async function onSynthesizeVideo() {
+                try {
+                    if (!cues || cues.length === 0) {
+                        alert('没有字幕数据，无法合成视频');
+                        return;
+                    }
+                    
+                    const confirmed = confirm('开始合成视频？这将使用Demucs分离原视频人声，然后与TTS音频合成新视频。');
+                    if (!confirmed) return;
+                    
+                    // 显示进度提示
+                    btnSynthesizeVideo.textContent = '合成中...';
+                    btnSynthesizeVideo.disabled = true;
+                    
+                    // 准备视频合成请求数据
+                    const payload = { 
+                        subtitles: cues.map((c, index) => ({
+                            line: index + 1,
+                            start_time: Number(c.start) || 0,
+                            end_time: Number(c.end) || 0,
+                            startraw: c.startraw || '',
+                            endraw: c.endraw || '',
+                            time: `${c.startraw || ''} --> ${c.endraw || ''}`,
+                            text: String(c.text || '').trim(),
+                            speaker: String(c.speaker || '').trim(),
+                        }))
+                    };
+                    
+                    console.log('发送视频合成请求数据:', payload);
+                    
+                    const res = await fetch(`/viewer_api/${taskId}/synthesize_video`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await res.json();
+                    
+                    if (data && data.code === 0) {
+                        alert('视频合成任务已启动，请稍后查看结果');
+                        // 跳转到任务状态页面
+                        window.open(`/synthesis_result/${data.task_id}`, '_blank');
+                    } else {
+                        alert(data && data.msg ? data.msg : '视频合成启动失败');
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('视频合成启动失败');
+                } finally {
+                    // 恢复按钮状态
+                    btnSynthesizeVideo.textContent = '合成视频';
+                    btnSynthesizeVideo.disabled = false;
+                }
+            }
+
+            btnGenerateTTS.addEventListener('click', onGenerateTTS);
+            btnSynthesizeVideo.addEventListener('click', onSynthesizeVideo);
             btnVoiceDubbing.addEventListener('click', onVoiceDubbing);
             btnSaveSrt.addEventListener('click', onSaveSrt);
             btnSaveJson.addEventListener('click', onSaveJson);
@@ -753,6 +867,85 @@ if __name__ == '__main__':
         download_url = f'/{API_RESOURCE}/{task_id}/{out_name}'
         return jsonify({"code": 0, "msg": "ok", "download_url": download_url})
 
+    @app.route('/viewer_api/<task_id>/synthesize_video', methods=['POST'])
+    def viewer_synthesize_video(task_id):
+        """视频合成接口 - 使用Demucs分离人声并与TTS音频合成视频"""
+        data = request.json
+        if not data or 'subtitles' not in data:
+            return jsonify({"code": 1, "msg": "缺少字幕数据"}), 400
+
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+
+        try:
+            # 查找原始视频文件
+            files = [f for f in task_dir.iterdir() if f.is_file()]
+            video_path = None
+            from videotrans.configure import config as _cfg
+            exts = set([e.lower() for e in _cfg.VIDEO_EXTS + _cfg.AUDIO_EXITS])
+            for f in files:
+                lower = f.name.lower()
+                if any(lower.endswith(f'.{ext}') for ext in exts):
+                    video_path = f
+                    break
+            
+            if not video_path:
+                return jsonify({"code": 1, "msg": "未找到视频文件"}), 400
+
+            # 创建新的视频合成任务
+            synthesis_task_id = f"synthesis_{task_id}_{int(time.time())}"
+            synthesis_dir = Path(TARGET_DIR) / synthesis_task_id
+            synthesis_dir.mkdir(parents=True, exist_ok=True)
+
+            # 启动视频合成任务
+            threading.Thread(target=start_video_synthesis_task, args=(
+                synthesis_task_id, 
+                str(video_path),
+                data['subtitles']
+            )).start()
+
+            return jsonify({
+                "code": 0,
+                "msg": "视频合成任务已启动",
+                "task_id": synthesis_task_id
+            })
+
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"启动视频合成失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/generate_tts', methods=['POST'])
+    def viewer_generate_tts(task_id):
+        """TTS音频生成接口 - 根据字幕内容生成人声音频"""
+        data = request.json
+        if not data or 'subtitles' not in data:
+            return jsonify({"code": 1, "msg": "缺少字幕数据"}), 400
+
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+
+        try:
+            # 创建新的TTS任务
+            tts_task_id = f"tts_{task_id}_{int(time.time())}"
+            tts_dir = Path(TARGET_DIR) / tts_task_id
+            tts_dir.mkdir(parents=True, exist_ok=True)
+
+            # 启动TTS生成任务
+            threading.Thread(target=start_tts_generation_task, args=(
+                tts_task_id, 
+                data['subtitles']
+            )).start()
+
+            return jsonify({
+                "code": 0,
+                "msg": "TTS生成任务已启动",
+                "task_id": tts_task_id
+            })
+
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"启动TTS生成失败: {str(e)}"}), 500
+
     @app.route('/viewer_api/<task_id>/voice_dubbing', methods=['POST'])
     def viewer_voice_dubbing(task_id):
         """智能配音接口 - 根据字幕和说话人信息进行多角色配音"""
@@ -834,6 +1027,512 @@ if __name__ == '__main__':
 
         except Exception as e:
             return jsonify({"code": 1, "msg": f"启动配音失败: {str(e)}"}), 500
+
+    def start_video_synthesis_task(task_id, video_path, subtitles):
+        """启动视频合成任务的后台处理函数"""
+        try:
+            from videotrans import tts
+            from videotrans.util import tools
+            import subprocess
+            
+            print(f"开始视频合成任务: {task_id}")
+            
+            # 创建任务目录
+            task_dir = Path(TARGET_DIR) / task_id
+            cache_dir = Path(config.TEMP_DIR) / task_id
+            task_dir.mkdir(parents=True, exist_ok=True)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 1. 从视频中提取音频
+            print("提取视频音频...")
+            audio_path = cache_dir / "extracted_audio.wav"
+            tools.conver_to_16k(video_path, str(audio_path))
+            
+            # 2. 使用Demucs分离人声和背景音乐
+            print("使用Demucs分离人声...")
+            bgm_path = cache_dir / "background_music.wav"  # 背景音乐
+            vocal_path = cache_dir / "original_vocal.wav"   # 原人声
+            
+            try:
+                success = separate_voice_background_demucs(str(audio_path), str(cache_dir))
+                
+                if success:
+                    # Demucs生成的文件名是background.wav和vocal.wav
+                    demucs_bgm_path = cache_dir / "background.wav"
+                    demucs_vocal_path = cache_dir / "vocal.wav"
+                    
+                    if demucs_bgm_path.exists() and demucs_vocal_path.exists():
+                        # 复制到我们期望的文件名
+                        import shutil
+                        shutil.copy2(demucs_bgm_path, bgm_path)
+                        shutil.copy2(demucs_vocal_path, vocal_path)
+                        
+                        print(f"Demucs人声分离成功")
+                        print(f"背景音乐文件: {bgm_path} (大小: {bgm_path.stat().st_size / 1024:.1f} KB)")
+                        print(f"原人声文件: {vocal_path} (大小: {vocal_path.stat().st_size / 1024:.1f} KB)")
+                    else:
+                        print("Demucs输出文件不存在，使用原音频作为背景音乐")
+                        import shutil
+                        shutil.copy2(audio_path, bgm_path)
+                        print(f"复制原音频作为背景音乐: {bgm_path}")
+                else:
+                    print("Demucs人声分离失败，使用原音频作为背景音乐")
+                    # 复制原音频作为背景音乐
+                    import shutil
+                    shutil.copy2(audio_path, bgm_path)
+                    print(f"复制原音频作为背景音乐: {bgm_path}")
+                    
+            except Exception as e:
+                print(f"人声分离失败: {str(e)}")
+                print("使用原音频作为背景音乐（无分离）")
+                # 复制原音频作为背景音乐
+                import shutil
+                shutil.copy2(audio_path, bgm_path)
+                print(f"复制原音频作为背景音乐: {bgm_path}")
+            
+            # 3. 生成TTS音频
+            print("生成TTS音频...")
+            queue_tts = []
+            for i, subtitle in enumerate(subtitles):
+                if not subtitle.get('text', '').strip():
+                    continue
+                    
+                start_time = int(subtitle.get('start_time', 0))
+                end_time = int(subtitle.get('end_time', 0))
+                duration = end_time - start_time
+                
+                if duration <= 0:
+                    continue
+                
+                filename_md5 = tools.get_md5(
+                    f"edgetts-{start_time}-{end_time}-zh-CN-XiaoxiaoNeural-+0%-+0%-+0Hz-{len(subtitle['text'])}-{i}")
+                
+                tts_item = {
+                    "line": subtitle.get('line', i + 1),
+                    "text": subtitle['text'],
+                    "role": "zh-CN-XiaoxiaoNeural",
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "startraw": subtitle.get('startraw', ''),
+                    "endraw": subtitle.get('endraw', ''),
+                    "rate": "+20%",  # 提高语速20%
+                    "volume": "+0%",
+                    "pitch": "+0Hz",
+                    "tts_type": 0,  # EdgeTTS
+                    "filename": config.TEMP_DIR + f"/dubbing_cache/{filename_md5}.wav"
+                }
+                queue_tts.append(tts_item)
+            
+            if not queue_tts:
+                print("没有有效的字幕数据")
+                return
+            
+            # 创建缓存目录
+            Path(config.TEMP_DIR + "/dubbing_cache").mkdir(parents=True, exist_ok=True)
+            
+            # 设置TTS状态并生成音频
+            config.box_tts = 'ing'
+            try:
+                tts.run(queue_tts=queue_tts, language="zh-cn", 
+                       inst=None, uuid=task_id, play=False, is_test=False)
+                print("TTS音频生成完成")
+            except Exception as e:
+                print(f"TTS生成失败: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                config.box_tts = 'stop'
+                return
+            finally:
+                config.box_tts = 'stop'
+            
+            # 4. 检查生成的TTS音频文件
+            audio_files = []
+            for item in queue_tts:
+                audio_path = Path(item['filename'])
+                if audio_path.exists():
+                    audio_files.append({
+                        'path': str(audio_path),
+                        'start_time': item['start_time'],
+                        'end_time': item['end_time'],
+                        'text': item['text']
+                    })
+            
+            if not audio_files:
+                print("没有生成任何TTS音频文件")
+                return
+            
+            # 5. 按时间顺序连接TTS音频
+            print("连接TTS音频...")
+            tts_audio_path = cache_dir / f"tts_audio_{int(time.time())}.wav"
+            success = concatenate_audio_files(audio_files, str(tts_audio_path))
+            
+            if not success:
+                print("TTS音频连接失败")
+                return
+            
+            # 6. 保存中间文件到任务目录（用于调试）
+            print("保存中间文件...")
+            task_bgm_path = task_dir / "background_music.wav"
+            task_tts_path = task_dir / "tts_audio.wav"
+            
+            import shutil
+            shutil.copy2(bgm_path, task_bgm_path)
+            shutil.copy2(tts_audio_path, task_tts_path)
+            print(f"背景音乐已保存: {task_bgm_path}")
+            print(f"TTS音频已保存: {task_tts_path}")
+            
+            # 7. 混合背景音乐和TTS音频
+            print("混合背景音乐和TTS音频...")
+            mixed_audio_path = cache_dir / f"mixed_audio_{int(time.time())}.wav"
+            success = mix_audio_files(str(bgm_path), str(tts_audio_path), str(mixed_audio_path))
+            
+            if not success:
+                print("音频混合失败")
+                return
+            
+            # 保存混合后的音频到任务目录
+            task_mixed_path = task_dir / "mixed_audio.wav"
+            shutil.copy2(mixed_audio_path, task_mixed_path)
+            print(f"混合音频已保存: {task_mixed_path}")
+            
+            # 8. 将混合音频与原视频画面合成
+            print("合成最终视频...")
+            final_video_path = task_dir / f"synthesized_video_{int(time.time())}.mp4"
+            
+            # 检查混合音频文件
+            mixed_file = Path(mixed_audio_path)
+            if mixed_file.exists():
+                print(f"混合音频文件大小: {mixed_file.stat().st_size / 1024:.1f} KB")
+            else:
+                print("混合音频文件不存在，无法合成视频")
+                return
+                
+            success = combine_audio_with_video_simple(str(mixed_audio_path), video_path, str(final_video_path))
+            
+            if success:
+                print(f"视频合成完成: {final_video_path}")
+                
+                # 保存任务结果信息
+                result_info = {
+                    "task_id": task_id,
+                    "status": "completed",
+                    "output_file": str(final_video_path),
+                    "download_url": f'/{API_RESOURCE}/{task_id}/{final_video_path.name}',
+                    "audio_count": len(audio_files),
+                    "total_duration": audio_files[-1]['end_time'] if audio_files else 0
+                }
+                
+                result_file = task_dir / "result.json"
+                with open(result_file, 'w', encoding='utf-8') as f:
+                    json.dump(result_info, f, ensure_ascii=False, indent=2)
+            else:
+                print("视频合成失败")
+                
+        except Exception as e:
+            print(f"视频合成任务失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def mix_audio_files(bgm_path, tts_path, output_path):
+        """混合背景音乐和TTS音频"""
+        try:
+            import subprocess
+            
+            # 检查输入文件
+            bgm_file = Path(bgm_path)
+            tts_file = Path(tts_path)
+            
+            if not bgm_file.exists():
+                print(f"背景音乐文件不存在: {bgm_path}")
+                return False
+                
+            if not tts_file.exists():
+                print(f"TTS音频文件不存在: {tts_path}")
+                return False
+            
+            print(f"背景音乐文件大小: {bgm_file.stat().st_size / 1024:.1f} KB")
+            print(f"TTS音频文件大小: {tts_file.stat().st_size / 1024:.1f} KB")
+            
+            # 使用更简单的混合方式，确保TTS音频为主，背景音乐为辅助
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', str(bgm_path),  # 背景音乐
+                '-i', str(tts_path),  # TTS音频
+                '-filter_complex', 
+                '[0:a]volume=0.3[bgm];[1:a]volume=1.0[tts];[bgm][tts]amix=inputs=2:duration=longest:dropout_transition=0[mixed]',
+                '-map', '[mixed]',
+                '-c:a', 'pcm_s16le',  # 使用PCM格式确保质量
+                '-ar', '44100',       # 采样率
+                str(output_path)
+            ]
+            
+            print(f"执行FFmpeg命令: {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            
+            output_file = Path(output_path)
+            if output_file.exists():
+                print(f"音频混合成功: {output_path}")
+                print(f"输出文件大小: {output_file.stat().st_size / 1024:.1f} KB")
+                return True
+            else:
+                print("音频混合失败：输出文件未生成")
+                return False
+            
+        except subprocess.CalledProcessError as e:
+            print(f"FFmpeg执行失败: {e}")
+            print(f"错误输出: {e.stderr}")
+            return False
+        except Exception as e:
+            print(f"音频混合失败: {str(e)}")
+            return False
+
+    def start_tts_generation_task(task_id, subtitles):
+        """启动TTS音频生成任务的后台处理函数"""
+        try:
+            from videotrans import tts
+            from videotrans.util import tools
+            import subprocess
+            
+            print(f"开始TTS生成任务: {task_id}")
+            
+            # 创建任务目录
+            task_dir = Path(TARGET_DIR) / task_id
+            cache_dir = Path(config.TEMP_DIR) / task_id
+            task_dir.mkdir(parents=True, exist_ok=True)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 准备TTS队列数据
+            queue_tts = []
+            for i, subtitle in enumerate(subtitles):
+                if not subtitle.get('text', '').strip():
+                    continue
+                    
+                # 计算时长
+                start_time = int(subtitle.get('start_time', 0))
+                end_time = int(subtitle.get('end_time', 0))
+                duration = end_time - start_time
+                
+                if duration <= 0:
+                    continue
+                
+                # 生成唯一文件名
+                filename_md5 = tools.get_md5(
+                    f"edgetts-{start_time}-{end_time}-zh-CN-XiaoxiaoNeural-+0%-+0%-+0Hz-{len(subtitle['text'])}-{i}")
+                
+                tts_item = {
+                    "line": subtitle.get('line', i + 1),
+                    "text": subtitle['text'],
+                    "role": "zh-CN-XiaoxiaoNeural",  # 默认使用EdgeTTS中文女声
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "startraw": subtitle.get('startraw', ''),
+                    "endraw": subtitle.get('endraw', ''),
+                    "rate": "+20%",  # 提高语速20%
+                    "volume": "+0%",
+                    "pitch": "+0Hz",
+                    "tts_type": 0,  # EdgeTTS
+                    "filename": config.TEMP_DIR + f"/dubbing_cache/{filename_md5}.wav"
+                }
+                queue_tts.append(tts_item)
+            
+            if not queue_tts:
+                print("没有有效的字幕数据")
+                return
+            
+            # 创建缓存目录
+            Path(config.TEMP_DIR + "/dubbing_cache").mkdir(parents=True, exist_ok=True)
+            
+            print(f"开始生成TTS音频，共{len(queue_tts)}条字幕")
+            
+            # 设置TTS状态
+            config.box_tts = 'ing'
+            
+            # 调用TTS引擎生成音频
+            try:
+                tts.run(queue_tts=queue_tts, language="zh-cn", 
+                       inst=None, uuid=task_id, play=False, is_test=False)
+                print("TTS引擎调用完成")
+            except Exception as e:
+                print(f"TTS引擎调用失败: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                config.box_tts = 'stop'
+                return
+            
+            # 检查生成的音频文件
+            audio_files = []
+            print(f"检查音频文件，共{len(queue_tts)}个任务...")
+            for i, item in enumerate(queue_tts):
+                audio_path = Path(item['filename'])
+                print(f"检查文件 {i+1}: {audio_path} - 存在: {audio_path.exists()}")
+                if audio_path.exists():
+                    audio_files.append({
+                        'path': str(audio_path),
+                        'start_time': item['start_time'],
+                        'end_time': item['end_time'],
+                        'text': item['text']
+                    })
+                    print(f"  ✓ 找到音频文件: {audio_path}")
+                else:
+                    print(f"  ✗ 音频文件不存在: {audio_path}")
+            
+            if not audio_files:
+                print("没有生成任何音频文件")
+                print("检查缓存目录中的文件:")
+                cache_dir = Path(config.TEMP_DIR + "/dubbing_cache")
+                if cache_dir.exists():
+                        print(f"  缓存文件: {f}")
+                else:
+                    print("  缓存目录不存在")
+                return
+            
+            print(f"成功生成{len(audio_files)}个音频片段")
+            
+            # 按时间顺序排序音频文件
+            audio_files.sort(key=lambda x: x['start_time'])
+            
+            # 使用ffmpeg连接音频文件
+            output_audio = task_dir / f"tts_audio_{int(time.time())}.wav"
+            success = concatenate_audio_files(audio_files, str(output_audio))
+            
+            if success:
+                print(f"TTS音频生成完成: {output_audio}")
+                
+                # 创建下载链接
+                download_url = f'/{API_RESOURCE}/{task_id}/{output_audio.name}'
+                
+                # 保存任务结果信息
+                result_info = {
+                    "task_id": task_id,
+                    "status": "completed",
+                    "output_file": str(output_audio),
+                    "download_url": download_url,
+                    "audio_count": len(audio_files),
+                    "total_duration": audio_files[-1]['end_time'] if audio_files else 0
+                }
+                
+                # 保存结果到文件
+                result_file = task_dir / "result.json"
+                with open(result_file, 'w', encoding='utf-8') as f:
+                    json.dump(result_info, f, ensure_ascii=False, indent=2)
+                
+            else:
+                print("音频连接失败")
+            
+            # 重置TTS状态
+            config.box_tts = 'stop'
+                
+        except Exception as e:
+            print(f"TTS生成任务失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def concatenate_audio_files(audio_files, output_path):
+        """按照SRT时间轴精确连接音频文件"""
+        try:
+            import subprocess
+            
+            if not audio_files:
+                print("没有音频文件需要连接")
+                return False
+            
+            # 创建临时目录
+            temp_dir = Path(output_path).parent / "temp_audio"
+            temp_dir.mkdir(exist_ok=True)
+            
+            print(f"开始连接音频，共{len(audio_files)}个片段")
+            
+            # 计算总时长
+            total_duration_ms = audio_files[-1]['end_time']
+            total_duration_sec = total_duration_ms / 1000.0
+            
+            print(f"总时长: {total_duration_sec:.2f}秒")
+            
+            # 为每个音频片段添加静音前缀，确保时间对齐
+            processed_files = []
+            for i, audio_file in enumerate(audio_files):
+                start_sec = audio_file['start_time'] / 1000.0
+                end_sec = audio_file['end_time'] / 1000.0
+                duration_sec = end_sec - start_sec
+                
+                print(f"处理片段 {i+1}: {start_sec:.2f}s - {end_sec:.2f}s (时长: {duration_sec:.2f}s)")
+                
+                processed_file = temp_dir / f"processed_{i:04d}.wav"
+                
+                # 计算需要添加的静音时长
+                if i == 0:
+                    # 第一个文件，添加开始静音
+                    silence_duration = start_sec
+                else:
+                    # 后续文件，添加与前一个文件的间隔
+                    prev_end = audio_files[i-1]['end_time'] / 1000.0
+                    silence_duration = start_sec - prev_end
+                
+                print(f"  静音时长: {silence_duration:.2f}秒")
+                
+                if silence_duration > 0:
+                    # 添加静音前缀
+                    cmd = [
+                        'ffmpeg', '-y',
+                        '-f', 'lavfi', '-i', f'anullsrc=duration={silence_duration}',
+                        '-i', audio_file['path'],
+                        '-filter_complex', '[0][1]concat=n=2:v=0:a=1[out]',
+                        '-map', '[out]',
+                        '-ar', '44100',
+                        '-ac', '2',
+                        str(processed_file)
+                    ]
+                else:
+                    # 直接复制文件
+                    cmd = [
+                        'ffmpeg', '-y',
+                        '-i', audio_file['path'],
+                        '-ar', '44100',
+                        '-ac', '2',
+                        str(processed_file)
+                    ]
+                
+                print(f"  执行命令: {' '.join(cmd)}")
+                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    processed_files.append(str(processed_file))
+                    print(f"  ✅ 处理成功")
+                else:
+                    print(f"  ❌ 处理失败: {result.stderr}")
+                    return False
+            
+            # 连接所有处理后的音频文件
+            if len(processed_files) == 1:
+                # 只有一个文件，直接复制
+                cmd = ['ffmpeg', '-y', '-i', processed_files[0], str(output_path)]
+            else:
+                # 多个文件，使用concat filter连接
+                concat_filter = f'concat=n={len(processed_files)}:v=0:a=1[out]'
+                cmd = ['ffmpeg', '-y']
+                for file_path in processed_files:
+                    cmd.extend(['-i', file_path])
+                cmd.extend(['-filter_complex', concat_filter, '-map', '[out]', str(output_path)])
+            
+            print(f"连接音频文件: {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print(f"✅ 音频连接完成: {output_path}")
+                
+                # 清理临时文件
+                import shutil
+                shutil.rmtree(temp_dir)
+                return True
+            else:
+                print(f"❌ 音频连接失败: {result.stderr}")
+                return False
+            
+        except Exception as e:
+            print(f"音频连接失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False
 
     def start_voice_dubbing_task(task_id, video_path, srt_path, subtitles):
         """启动智能配音任务的后台处理函数"""
@@ -1082,6 +1781,15 @@ if __name__ == '__main__':
             vocal_path = output_path / "vocal.wav"
             background_path = output_path / "background.wav"
             
+            print(f"开始Demucs人声分离...")
+            print(f"输入音频: {audio_path}")
+            print(f"输出目录: {output_dir}")
+            
+            # 检查输入文件
+            if not Path(audio_path).exists():
+                print(f"输入音频文件不存在: {audio_path}")
+                return False
+            
             # 尝试多种方式调用Demucs
             demucs_commands = [
                 ['demucs'],
@@ -1105,7 +1813,7 @@ if __name__ == '__main__':
                 print("无法找到Demucs，请安装: pip install demucs")
                 return False
             
-            # 使用Demucs分离
+            # 使用Demucs分离 - 使用更简单的参数
             print("执行Demucs分离...")
             demucs_args = [
                 *demucs_cmd,
@@ -1115,40 +1823,77 @@ if __name__ == '__main__':
             ]
             
             print(f"执行命令: {' '.join(demucs_args)}")
-            result = subprocess.run(demucs_args, capture_output=True, text=True)
+            result = subprocess.run(demucs_args, capture_output=True, text=True, timeout=300)
+            
+            print(f"Demucs返回码: {result.returncode}")
+            if result.stdout:
+                print(f"Demucs输出: {result.stdout}")
+            if result.stderr:
+                print(f"Demucs错误: {result.stderr}")
             
             if result.returncode != 0:
-                print(f"Demucs分离失败: {result.stderr}")
+                print(f"Demucs分离失败，返回码: {result.returncode}")
                 return False
             
-            # Demucs输出目录结构
+            # Demucs输出目录结构 - 检查多种可能的输出结构
             audio_name = Path(audio_path).stem
-            demucs_output_dir = output_path / "htdemucs" / audio_name
+            possible_output_dirs = [
+                output_path / "htdemucs" / audio_name,
+                output_path / "htdemucs",
+                output_path / audio_name,
+                output_path
+            ]
             
-            # 查找分离后的文件
-            vocals_file = demucs_output_dir / "vocals.wav"
-            no_vocals_file = demucs_output_dir / "no_vocals.wav"
+            vocals_file = None
+            no_vocals_file = None
             
-            if vocals_file.exists() and no_vocals_file.exists():
+            for demucs_output_dir in possible_output_dirs:
+                if demucs_output_dir.exists():
+                    print(f"检查输出目录: {demucs_output_dir}")
+                    
+                    # 查找分离后的文件
+                    vocals_candidate = demucs_output_dir / "vocals.wav"
+                    no_vocals_candidate = demucs_output_dir / "no_vocals.wav"
+                    
+                    if vocals_candidate.exists() and no_vocals_candidate.exists():
+                        vocals_file = vocals_candidate
+                        no_vocals_file = no_vocals_candidate
+                        print(f"找到分离文件: {vocals_file}, {no_vocals_file}")
+                        break
+                    else:
+                        # 列出目录内容用于调试
+                        print(f"目录内容: {list(demucs_output_dir.iterdir())}")
+            
+            if vocals_file and no_vocals_file:
                 # 复制到指定位置
                 shutil.copy2(vocals_file, vocal_path)
                 shutil.copy2(no_vocals_file, background_path)
                 
-                print(f"人声分离成功: {vocal_path}")
-                print(f"背景音分离成功: {background_path}")
+                print(f"人声分离成功: {vocal_path} (大小: {vocal_path.stat().st_size / 1024:.1f} KB)")
+                print(f"背景音分离成功: {background_path} (大小: {background_path.stat().st_size / 1024:.1f} KB)")
                 
                 # 清理Demucs临时文件
-                if demucs_output_dir.exists():
-                    shutil.rmtree(demucs_output_dir)
+                for demucs_output_dir in possible_output_dirs:
+                    if demucs_output_dir.exists() and demucs_output_dir != output_path:
+                        try:
+                            shutil.rmtree(demucs_output_dir)
+                            print(f"清理临时目录: {demucs_output_dir}")
+                        except:
+                            pass
                 
                 return True
             else:
                 print("Demucs输出文件未找到")
-                print(f"查找路径: {demucs_output_dir}")
+                print(f"检查的路径: {possible_output_dirs}")
                 return False
                 
+        except subprocess.TimeoutExpired:
+            print("Demucs分离超时")
+            return False
         except Exception as e:
             print(f"Demucs分离异常: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def combine_audio_with_video(bgm_path, dubbing_path, video_path, output_path):
@@ -1199,11 +1944,26 @@ if __name__ == '__main__':
         try:
             import subprocess
             
+            # 检查输入文件
+            dubbing_file = Path(dubbing_path)
+            video_file = Path(video_path)
+            
+            if not dubbing_file.exists():
+                print(f"配音音频文件不存在: {dubbing_path}")
+                return False
+                
+            if not video_file.exists():
+                print(f"视频文件不存在: {video_path}")
+                return False
+            
+            print(f"配音音频文件大小: {dubbing_file.stat().st_size / 1024:.1f} KB")
+            print(f"视频文件大小: {video_file.stat().st_size / 1024:.1f} KB")
+            
             # 直接将配音音频与原视频画面合成
             cmd = [
                 'ffmpeg', '-y',
-                '-i', video_path,
-                '-i', dubbing_path,
+                '-i', str(video_path),
+                '-i', str(dubbing_path),
                 '-c:v', 'copy',  # 复制视频流，不重新编码
                 '-c:a', 'aac',
                 '-b:a', '128k',
@@ -1212,12 +1972,221 @@ if __name__ == '__main__':
                 '-shortest',  # 以较短的流为准
                 str(output_path)
             ]
-            subprocess.run(cmd, check=True, capture_output=True)
-            print(f"简化版视频合成完成: {output_path}")
+            
+            print(f"执行FFmpeg视频合成命令: {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            
+            output_file = Path(output_path)
+            if output_file.exists():
+                print(f"视频合成完成: {output_path}")
+                print(f"输出视频文件大小: {output_file.stat().st_size / 1024:.1f} KB")
+                return True
+            else:
+                print("视频合成失败：输出文件未生成")
+                return False
                 
+        except subprocess.CalledProcessError as e:
+            print(f"FFmpeg视频合成执行失败: {e}")
+            print(f"错误输出: {e.stderr}")
+            return False
         except Exception as e:
-            print(f"简化版视频合成失败: {str(e)}")
-            # 如果合成失败，至少保留配音音频文件
+            print(f"视频合成失败: {str(e)}")
+            return False
+
+    @app.route('/synthesis_result/<task_id>')
+    def synthesis_result(task_id):
+        """视频合成结果页面"""
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return "任务不存在", 404
+        
+        # 查找输出文件
+        files = [f for f in task_dir.iterdir() if f.is_file()]
+        output_files = []
+        for f in files:
+            if f.suffix.lower() in ['.mp4', '.avi', '.mov', '.mkv', '.wav', '.mp3', '.m4a']:
+                output_files.append(f)
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>视频合成结果 - {task_id}</title>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 20px; background: #f5f5f5; }}
+                .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                h1 {{ color: #333; margin-bottom: 20px; }}
+                .file-list {{ list-style: none; padding: 0; }}
+                .file-item {{ padding: 10px; border: 1px solid #ddd; margin: 10px 0; border-radius: 4px; background: #f9f9f9; }}
+                .file-item a {{ color: #007AFF; text-decoration: none; font-weight: bold; }}
+                .file-item a:hover {{ text-decoration: underline; }}
+                .status {{ padding: 10px; border-radius: 4px; margin: 10px 0; }}
+                .status.processing {{ background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; }}
+                .status.completed {{ background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }}
+                .status.error {{ background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }}
+                .video-player {{ width: 100%; margin: 10px 0; }}
+                .audio-player {{ width: 100%; margin: 10px 0; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>视频合成结果</h1>
+                <div class="task-info">
+                    <p><strong>任务ID:</strong> {task_id}</p>
+                    <p><strong>状态:</strong> <span id="status">检查中...</span></p>
+                </div>
+                <div id="fileList">
+                    <p>正在检查输出文件...</p>
+                </div>
+            </div>
+            
+            <script>
+                const taskId = '{task_id}';
+                
+                async function checkStatus() {{
+                    try {{
+                        const res = await fetch(`/task_status?task_id=${{taskId}}`);
+                        const data = await res.json();
+                        
+                        if (data.code === 0) {{
+                            document.getElementById('status').textContent = '已完成';
+                            document.getElementById('status').className = 'status completed';
+                            
+                            const files = data.data?.url || [];
+                            const fileList = document.getElementById('fileList');
+                            if (files.length > 0) {{
+                                fileList.innerHTML = '<h3>输出文件:</h3><ul class="file-list">';
+                                files.forEach(url => {{
+                                    const fileName = url.split('/').pop();
+                                    const isVideo = fileName.match(/\\.(mp4|avi|mov|mkv)$/i);
+                                    const isAudio = fileName.match(/\\.(wav|mp3|m4a)$/i);
+                                    fileList.innerHTML += `<li class="file-item">
+                                        <a href="${{url}}" target="_blank">${{fileName}}</a>
+                                        ${{isVideo ? '<br><video controls class="video-player"><source src="' + url + '" type="video/mp4">您的浏览器不支持视频播放</video>' : ''}}
+                                        ${{isAudio ? '<br><audio controls class="audio-player"><source src="' + url + '" type="audio/wav">您的浏览器不支持音频播放</audio>' : ''}}
+                                    </li>`;
+                                }});
+                                fileList.innerHTML += '</ul>';
+                            }} else {{
+                                fileList.innerHTML = '<p>暂无输出文件</p>';
+                            }}
+                        }} else if (data.code === -1) {{
+                            document.getElementById('status').textContent = data.msg || '处理中...';
+                            document.getElementById('status').className = 'status processing';
+                            setTimeout(checkStatus, 2000);
+                        }} else {{
+                            document.getElementById('status').textContent = data.msg || '处理失败';
+                            document.getElementById('status').className = 'status error';
+                        }}
+                    }} catch (e) {{
+                        document.getElementById('status').textContent = '检查状态失败';
+                        document.getElementById('status').className = 'status error';
+                    }}
+                }}
+                
+                checkStatus();
+            </script>
+        </body>
+        </html>
+        """
+        return html
+
+    @app.route('/tts_result/<task_id>')
+    def tts_result(task_id):
+        """TTS结果页面"""
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return "任务不存在", 404
+        
+        # 查找输出文件
+        files = [f for f in task_dir.iterdir() if f.is_file()]
+        output_files = []
+        for f in files:
+            if f.suffix.lower() in ['.wav', '.mp3', '.m4a']:
+                output_files.append(f)
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>TTS结果 - {task_id}</title>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 20px; background: #f5f5f5; }}
+                .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                h1 {{ color: #333; margin-bottom: 20px; }}
+                .file-list {{ list-style: none; padding: 0; }}
+                .file-item {{ padding: 10px; border: 1px solid #ddd; margin: 10px 0; border-radius: 4px; background: #f9f9f9; }}
+                .file-item a {{ color: #007AFF; text-decoration: none; font-weight: bold; }}
+                .file-item a:hover {{ text-decoration: underline; }}
+                .status {{ padding: 10px; border-radius: 4px; margin: 10px 0; }}
+                .status.processing {{ background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; }}
+                .status.completed {{ background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }}
+                .status.error {{ background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }}
+                .audio-player {{ width: 100%; margin: 10px 0; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>TTS音频生成结果</h1>
+                <div class="task-info">
+                    <p><strong>任务ID:</strong> {task_id}</p>
+                    <p><strong>状态:</strong> <span id="status">检查中...</span></p>
+                </div>
+                <div id="fileList">
+                    <p>正在检查输出文件...</p>
+                </div>
+            </div>
+            
+            <script>
+                const taskId = '{task_id}';
+                
+                async function checkStatus() {{
+                    try {{
+                        const res = await fetch(`/task_status?task_id=${{taskId}}`);
+                        const data = await res.json();
+                        
+                        if (data.code === 0) {{
+                            document.getElementById('status').textContent = '已完成';
+                            document.getElementById('status').className = 'status completed';
+                            
+                            const files = data.data?.url || [];
+                            const fileList = document.getElementById('fileList');
+                            if (files.length > 0) {{
+                                fileList.innerHTML = '<h3>输出文件:</h3><ul class="file-list">';
+                                files.forEach(url => {{
+                                    const fileName = url.split('/').pop();
+                                    const isAudio = fileName.match(/\\.(wav|mp3|m4a)$/i);
+                                    fileList.innerHTML += `<li class="file-item">
+                                        <a href="${{url}}" target="_blank">${{fileName}}</a>
+                                        ${{isAudio ? '<br><audio controls class="audio-player"><source src="' + url + '" type="audio/wav">您的浏览器不支持音频播放</audio>' : ''}}
+                                    </li>`;
+                                }});
+                                fileList.innerHTML += '</ul>';
+                            }} else {{
+                                fileList.innerHTML = '<p>暂无输出文件</p>';
+                            }}
+                        }} else if (data.code === -1) {{
+                            document.getElementById('status').textContent = data.msg || '处理中...';
+                            document.getElementById('status').className = 'status processing';
+                            setTimeout(checkStatus, 2000);
+                        }} else {{
+                            document.getElementById('status').textContent = data.msg || '处理失败';
+                            document.getElementById('status').className = 'status error';
+                        }}
+                    }} catch (e) {{
+                        document.getElementById('status').textContent = '检查状态失败';
+                        document.getElementById('status').className = 'status error';
+                    }}
+                }}
+                
+                checkStatus();
+            </script>
+        </body>
+        </html>
+        """
+        return html
 
     @app.route('/dubbing_result/<task_id>')
     def dubbing_result(task_id):
