@@ -1282,7 +1282,7 @@ if __name__ == '__main__':
 
     @app.route('/viewer_api/<task_id>/synthesize_video', methods=['POST'])
     def viewer_synthesize_video(task_id):
-        """视频合成接口 - 使用Demucs分离人声并与TTS音频合成视频"""
+        """视频合成接口 - 使用 aucs分离人声并与TTS音频合成视频"""
         data = request.json
         if not data or 'subtitles' not in data:
             return jsonify({"code": 1, "msg": "缺少字幕数据"}), 400
@@ -2021,29 +2021,47 @@ if __name__ == '__main__':
             # 创建静音文件作为基础 - 修复FFmpeg参数
             silence_file = output_file.parent / "silence.wav"
             tools.runffmpeg([
-                '-y', '-f', 'lavfi', '-i', f'anullsrc=channel_layout=stereo:sample_rate=44100:duration={total_duration/1000}',
+                '-y', '-f', 'lavfi', '-i', 'anullsrc',
+                '-t', str(total_duration/1000),  # 使用-t参数指定时长
                 '-ar', '44100', '-ac', '2', str(silence_file)
             ])
             
-            # 为每个音频片段创建覆盖命令
+            # 为每个音频片段创建覆盖命令，只处理存在的文件
             filter_complex = []
             inputs = [str(silence_file)]
+            valid_segments = []
             
             for i, segment in enumerate(audio_segments):
                 start_time = segment['start_time'] / 1000  # 转换为秒
                 audio_file = segment['file']
                 
+                # 检查文件是否存在
+                if not Path(audio_file).exists():
+                    print(f"警告：音频文件不存在，跳过: {audio_file}")
+                    continue
+                
                 # 添加输入文件
                 inputs.extend(['-i', audio_file])
                 
+                # 记录有效的片段索引
+                valid_segments.append({
+                    'index': len(valid_segments) + 1,  # 重新计算索引
+                    'start_time': start_time,
+                    'file': audio_file
+                })
+                
                 # 添加覆盖滤镜
-                filter_complex.append(f"[{i+1}:a]adelay={int(start_time*1000)}|{int(start_time*1000)}[a{i+1}]")
+                filter_complex.append(f"[{len(valid_segments)}:a]adelay={int(start_time*1000)}|{int(start_time*1000)}[a{len(valid_segments)}]")
+            
+            if not valid_segments:
+                print("没有有效的音频片段，无法合成")
+                return False
             
             # 合并所有音频
             mix_inputs = "[0:a]"
-            for i in range(len(audio_segments)):
+            for i in range(len(valid_segments)):
                 mix_inputs += f"[a{i+1}]"
-            mix_inputs += f"amix=inputs={len(audio_segments)+1}:duration=longest[out]"
+            mix_inputs += f"amix=inputs={len(valid_segments)+1}:duration=longest[out]"
             
             filter_complex.append(mix_inputs)
             
