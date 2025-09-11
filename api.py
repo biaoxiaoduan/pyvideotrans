@@ -346,6 +346,7 @@ if __name__ == '__main__':
                     <button id=\"btnSaveTranslation\" style=\"padding:6px 12px; border:1px solid #17a2b8; background:#17a2b8; color:#fff; border-radius:6px; cursor:pointer; display:none;\">保存翻译</button>
                     <button id=\"btnVoiceClone\" style=\"padding:6px 12px; border:1px solid #e91e63; background:#e91e63; color:#fff; border-radius:6px; cursor:pointer;\">语音克隆</button>
                     <button id=\"btnGenerateAudio\" style=\"padding:6px 12px; border:1px solid #ff9800; background:#ff9800; color:#fff; border-radius:6px; cursor:pointer; display:none;\">生成音频</button>
+                    <button id=\"btnSynthesizeAudio\" style=\"padding:6px 12px; border:1px solid #4caf50; background:#4caf50; color:#fff; border-radius:6px; cursor:pointer; display:none;\">合成音频</button>
                     <button id=\"btnSynthesizeVideo\" style=\"padding:6px 12px; border:1px solid #ff6b35; background:#ff6b35; color:#fff; border-radius:6px; cursor:pointer;\">合成视频</button>
                     <button id=\"btnVoiceDubbing\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">智能配音</button>
                     <button id=\"btnSaveSrt\" style=\"padding:6px 12px; border:1px solid #ddd; background:#fff; border-radius:6px; cursor:pointer;\">下载SRT(含spk)</button>
@@ -372,6 +373,7 @@ if __name__ == '__main__':
             const btnSaveTranslation = document.getElementById('btnSaveTranslation');
             const btnVoiceClone = document.getElementById('btnVoiceClone');
             const btnGenerateAudio = document.getElementById('btnGenerateAudio');
+            const btnSynthesizeAudio = document.getElementById('btnSynthesizeAudio');
             const btnSynthesizeVideo = document.getElementById('btnSynthesizeVideo');
             const btnSaveSrt = document.getElementById('btnSaveSrt');
             const btnSaveJson = document.getElementById('btnSaveJson');
@@ -860,6 +862,13 @@ if __name__ == '__main__':
                                             btnGenerateAudio.style.display = 'inline-block';
                                         }
                                     });
+                                    
+                                    // 检查是否有已生成的音频文件，如果有则显示合成音频按钮
+                                    checkGeneratedAudio().then(hasAudio => {
+                                        if (hasAudio) {
+                                            btnSynthesizeAudio.style.display = 'inline-block';
+                                        }
+                                    });
                                     alert('翻译完成！您可以编辑翻译结果，然后点击"保存翻译"按钮保存。');
                                 } else {
                                     alert('翻译失败：没有返回翻译结果');
@@ -1009,6 +1018,62 @@ if __name__ == '__main__':
                 }
             }
 
+            // 合成音频功能 - 直接合成已生成的音频文件
+            async function onSynthesizeAudio() {
+                try {
+                    if (!cues || cues.length === 0) {
+                        alert('没有字幕数据');
+                        return;
+                    }
+                    
+                    // 检查是否有翻译字幕
+                    const hasTranslation = cues.some(cue => (cue.translated_text && cue.translated_text.trim()) || (cue.translation && cue.translation.trim()));
+                    if (!hasTranslation) {
+                        alert('请先翻译字幕');
+                        return;
+                    }
+                    
+                    // 确认合成音频
+                    const confirmMessage = `即将合成 ${cues.length} 条字幕的音频文件。\n\n是否继续？`;
+                    if (!confirm(confirmMessage)) {
+                        return;
+                    }
+                    
+                    btnSynthesizeAudio.textContent = '合成音频中...';
+                    btnSynthesizeAudio.disabled = true;
+                    
+                    console.log('开始合成音频...');
+                    
+                    const res = await fetch(`/viewer_api/${taskId}/synthesize_audio`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            subtitles: cues.map((c, index) => ({
+                                line: index + 1,
+                                start_time: Number(c.start) || 0,
+                                end_time: Number(c.end) || 0,
+                                text: c.translated_text || c.translation || c.text,
+                                speaker: c.speaker || 'speaker_0'
+                            }))
+                        })
+                    });
+                    
+                    const data = await res.json();
+                    if (data.code === 0) {
+                        alert(`音频合成成功！\\n输出文件: ${data.output_file}`);
+                        console.log('合成结果:', data);
+                    } else {
+                        alert(`音频合成失败: ${data.msg}`);
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('音频合成失败');
+                } finally {
+                    btnSynthesizeAudio.textContent = '合成音频';
+                    btnSynthesizeAudio.disabled = false;
+                }
+            }
+
             // 生成音频功能
             async function onGenerateAudio() {
                 try {
@@ -1090,11 +1155,24 @@ if __name__ == '__main__':
                     return false;
                 }
             }
+            
+            // 检查是否有已生成的音频文件
+            async function checkGeneratedAudio() {
+                try {
+                    const res = await fetch(`/viewer_api/${taskId}/check_generated_audio`);
+                    const data = await res.json();
+                    return data && data.code === 0 && data.has_audio;
+                } catch (e) {
+                    console.error('检查已生成音频失败:', e);
+                    return false;
+                }
+            }
 
             btnTranslateSubtitle.addEventListener('click', onTranslateSubtitle);
             btnSaveTranslation.addEventListener('click', onSaveTranslation);
             btnVoiceClone.addEventListener('click', onVoiceClone);
             btnGenerateAudio.addEventListener('click', onGenerateAudio);
+            btnSynthesizeAudio.addEventListener('click', onSynthesizeAudio);
             btnSynthesizeVideo.addEventListener('click', onSynthesizeVideo);
             btnVoiceDubbing.addEventListener('click', onVoiceDubbing);
             btnSaveSrt.addEventListener('click', onSaveSrt);
@@ -1856,6 +1934,34 @@ if __name__ == '__main__':
             print(f"创建语音克隆失败: {str(e)}")
             return None
 
+    @app.route('/viewer_api/<task_id>/check_generated_audio', methods=['GET'])
+    def viewer_check_generated_audio(task_id):
+        """检查是否有已生成的音频文件"""
+        try:
+            # 检查任务目录
+            task_dir = Path(TARGET_DIR) / task_id
+            if not task_dir.exists():
+                return jsonify({"code": 1, "msg": "任务目录不存在", "has_audio": False})
+            
+            # 检查音频目录
+            audio_dir = task_dir / "generated_audio"
+            if not audio_dir.exists():
+                return jsonify({"code": 0, "msg": "没有音频目录", "has_audio": False})
+            
+            # 查找音频文件
+            audio_files = list(audio_dir.glob("segment_*.wav"))
+            has_audio = len(audio_files) > 0
+            
+            return jsonify({
+                "code": 0,
+                "msg": "检查完成",
+                "has_audio": has_audio,
+                "audio_count": len(audio_files)
+            })
+            
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"检查失败: {str(e)}", "has_audio": False})
+
     @app.route('/viewer_api/<task_id>/check_voice_mapping', methods=['GET'])
     def viewer_check_voice_mapping(task_id):
         """检查语音克隆映射是否存在"""
@@ -1875,6 +1981,93 @@ if __name__ == '__main__':
             
         except Exception as e:
             return jsonify({"code": 1, "msg": f"检查失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/synthesize_audio', methods=['POST'])
+    def viewer_synthesize_audio(task_id):
+        """合成音频接口 - 直接合成已生成的音频文件"""
+        data = request.json
+        if not data or 'subtitles' not in data:
+            return jsonify({"code": 1, "msg": "缺少字幕数据"}), 400
+        
+        try:
+            subtitles = data['subtitles']
+            if not subtitles:
+                return jsonify({"code": 1, "msg": "字幕数据为空"}), 400
+            
+            # 检查任务目录
+            task_dir = Path(TARGET_DIR) / task_id
+            if not task_dir.exists():
+                return jsonify({"code": 1, "msg": "任务目录不存在"}), 400
+            
+            # 检查是否有已生成的音频文件
+            audio_dir = task_dir / "generated_audio"
+            if not audio_dir.exists():
+                return jsonify({"code": 1, "msg": "没有找到已生成的音频文件"}), 400
+            
+            # 查找所有音频片段文件
+            audio_files = []
+            print(f"接收到的字幕数据: {len(subtitles)} 条")
+            print(f"第一条字幕数据: {subtitles[0] if subtitles else 'None'}")
+            
+            for i, subtitle in enumerate(subtitles):
+                # 检查必需字段，支持两种字段名
+                start_time = subtitle.get('start_time')
+                if start_time is None:
+                    start_time = subtitle.get('start')
+                    
+                end_time = subtitle.get('end_time')
+                if end_time is None:
+                    end_time = subtitle.get('end')
+                
+                if start_time is None or end_time is None:
+                    print(f"警告：字幕 {i+1} 缺少时间字段: {subtitle}")
+                    continue
+                    
+                segment_file = audio_dir / f"segment_{i+1:04d}.wav"
+                if segment_file.exists():
+                    audio_files.append({
+                        'start_time': start_time,
+                        'end_time': end_time,
+                        'file': str(segment_file)
+                    })
+                else:
+                    print(f"警告：音频文件不存在: {segment_file}")
+            
+            if not audio_files:
+                return jsonify({"code": 1, "msg": "没有找到有效的音频文件"}), 400
+            
+            print(f"找到 {len(audio_files)} 个音频文件，开始合成...")
+            
+            # 计算总时长
+            total_duration = max(segment['end_time'] for segment in audio_files)
+            
+            # 合成完整音频
+            final_audio_file = audio_dir / f"{task_id}_synthesized_audio.wav"
+            success = synthesize_final_audio(audio_files, final_audio_file, total_duration)
+            
+            if not success:
+                return jsonify({"code": 1, "msg": "音频合成失败"}), 500
+            
+            # 检查文件是否生成成功
+            if not final_audio_file.exists():
+                return jsonify({"code": 1, "msg": "合成文件未生成"}), 500
+            
+            file_size = final_audio_file.stat().st_size
+            print(f"音频合成成功: {final_audio_file} (大小: {file_size / 1024:.1f} KB)")
+            
+            return jsonify({
+                "code": 0,
+                "msg": "音频合成成功",
+                "output_file": str(final_audio_file),
+                "file_size": file_size,
+                "segments_count": len(audio_files)
+            })
+            
+        except Exception as e:
+            print(f"合成音频失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"code": 1, "msg": f"合成音频失败: {str(e)}"}), 500
 
     @app.route('/viewer_api/<task_id>/generate_audio', methods=['POST'])
     def viewer_generate_audio(task_id):
@@ -2028,7 +2221,7 @@ if __name__ == '__main__':
             
             # 为每个音频片段创建覆盖命令，只处理存在的文件
             filter_complex = []
-            inputs = [str(silence_file)]
+            inputs = ['-i', str(silence_file)]  # 添加 -i 前缀
             valid_segments = []
             
             for i, segment in enumerate(audio_segments):
@@ -2043,15 +2236,16 @@ if __name__ == '__main__':
                 # 添加输入文件
                 inputs.extend(['-i', audio_file])
                 
-                # 记录有效的片段索引
+                # 记录有效的片段索引（从1开始，因为0是静音文件）
+                current_index = len(valid_segments) + 1
                 valid_segments.append({
-                    'index': len(valid_segments) + 1,  # 重新计算索引
+                    'index': current_index,
                     'start_time': start_time,
                     'file': audio_file
                 })
                 
                 # 添加覆盖滤镜
-                filter_complex.append(f"[{len(valid_segments)}:a]adelay={int(start_time*1000)}|{int(start_time*1000)}[a{len(valid_segments)}]")
+                filter_complex.append(f"[{current_index}:a]adelay={int(start_time*1000)}|{int(start_time*1000)}[a{current_index}]")
             
             if not valid_segments:
                 print("没有有效的音频片段，无法合成")
@@ -2059,8 +2253,8 @@ if __name__ == '__main__':
             
             # 合并所有音频
             mix_inputs = "[0:a]"
-            for i in range(len(valid_segments)):
-                mix_inputs += f"[a{i+1}]"
+            for segment in valid_segments:
+                mix_inputs += f"[a{segment['index']}]"
             mix_inputs += f"amix=inputs={len(valid_segments)+1}:duration=longest[out]"
             
             filter_complex.append(mix_inputs)
@@ -2530,7 +2724,8 @@ if __name__ == '__main__':
                     # 添加静音前缀
                     cmd = [
                         'ffmpeg', '-y',
-                        '-f', 'lavfi', '-i', f'anullsrc=duration={silence_duration}',
+                        '-f', 'lavfi', '-i', 'anullsrc',
+                        '-t', str(silence_duration),
                         '-i', audio_file['path'],
                         '-filter_complex', '[0][1]concat=n=2:v=0:a=1[out]',
                         '-map', '[out]',
