@@ -507,7 +507,7 @@ if __name__ == '__main__':
                     <button id=\"btnGenerateAudio\" style=\"padding:6px 12px; border:1px solid #ff9800; background:#ff9800; color:#fff; border-radius:6px; cursor:pointer; display:none;\">生成音频</button>
                     <button id=\"btnSynthesizeAudio\" style=\"padding:6px 12px; border:1px solid #4caf50; background:#4caf50; color:#fff; border-radius:6px; cursor:pointer; display:none;\">合成音频</button>
                     <button id=\"btnSynthesizeVideo\" style=\"padding:6px 12px; border:1px solid #ff6b35; background:#ff6b35; color:#fff; border-radius:6px; cursor:pointer;\">合成视频</button>
-                    <button id=\"btnVoiceDubbing\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">智能配音</button>
+                    <button id=\"btnAddSubtitles\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">添加字幕</button>
                     <button id=\"btnSaveSrt\" style=\"padding:6px 12px; border:1px solid #ddd; background:#fff; border-radius:6px; cursor:pointer;\">下载SRT(含spk)</button>
                     <button id="btnSaveJson" style="padding:6px 12px; border:1px solid #ddd; background:#fff; border-radius:6px; cursor:pointer;">下载JSON</button>
                 </div>
@@ -559,6 +559,7 @@ if __name__ == '__main__':
             const btnSynthesizeAudio = document.getElementById('btnSynthesizeAudio');
             const btnSynthesizeVideo = document.getElementById('btnSynthesizeVideo');
             const btnSaveSrt = document.getElementById('btnSaveSrt');
+            const btnAddSubtitles = document.getElementById('btnAddSubtitles');
             const btnSaveJson = document.getElementById('btnSaveJson');
             const dragHint = document.getElementById('dragHint');
             const zoomLevelEl = document.getElementById('zoomLevel');
@@ -575,6 +576,7 @@ if __name__ == '__main__':
             let videoMs = 0;
             let speakers = [];
             let speakerColors = {}; // 存储说话人对应的颜色
+            const originalVideoUrl = '((VIDEO_URL))';
 
             function showSynthModal(msg) {
                 synthModalMsg.textContent = msg || '请稍候...';
@@ -583,6 +585,108 @@ if __name__ == '__main__':
             function hideSynthModal() {
                 synthModal.style.display = 'none';
             }
+
+            // 添加字幕弹窗
+            const addSubModal = document.createElement('div');
+            addSubModal.className = 'modal-overlay';
+            addSubModal.innerHTML = `
+              <div class="modal">
+                <h4>添加字幕到视频</h4>
+                <div style="text-align:left;font-size:13px;line-height:1.9;">
+                  <label><input type="radio" name="addTarget" value="original" checked> 原视频（初始载入的）</label><br>
+                  <label><input type="radio" name="addTarget" value="current"> 当前播放视频（可能是合成结果）</label>
+                </div>
+                <div style="display:flex;gap:8px;justify-content:center;margin-top:8px;flex-wrap:wrap;">
+                  <div>
+                    <div style="font-size:12px;color:#666;text-align:left;">字体大小(px)</div>
+                    <input id="subFontSize" type="number" min="12" max="120" value="72" style="width:120px;padding:6px;">
+                  </div>
+                  <div>
+                    <div style="font-size:12px;color:#666;text-align:left;">距离底部(%)</div>
+                    <input id="subBottomPct" type="number" min="0" max="40" value="20" style="width:120px;padding:6px;">
+                  </div>
+                  <div style="min-width:280px;">
+                    <div style="font-size:12px;color:#666;text-align:left;">选择字幕文件（可选）</div>
+                    <select id="subFileSelect" style="width:280px;padding:6px;">
+                      <option value="">使用当前页面字幕（翻译优先）</option>
+                    </select>
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;">
+                  <button id="btnSubCancel" style="padding:6px 12px;">取消</button>
+                  <button id="btnSubOk" style="padding:6px 12px;background:#007AFF;color:#fff;border:none;border-radius:6px;">确定</button>
+                </div>
+              </div>`;
+            document.body.appendChild(addSubModal);
+            
+            async function populateSubtitleFiles() {
+                try {
+                    const res = await fetch(`/viewer_api/${taskId}/list_subtitle_files`);
+                    const data = await res.json();
+                    const sel = document.getElementById('subFileSelect');
+                    if (data && data.code === 0 && Array.isArray(data.files)) {
+                        // 清空保留第一个默认选项
+                        sel.innerHTML = '<option value="">使用当前页面字幕（翻译优先）</option>';
+                        data.files.forEach(f => {
+                            const opt = document.createElement('option');
+                            opt.value = f.url; // 传URL
+                            opt.textContent = f.name;
+                            sel.appendChild(opt);
+                        });
+                    }
+                } catch (e) {
+                    console.warn('获取字幕文件列表失败', e);
+                }
+            }
+            async function showAddSubModal() { await populateSubtitleFiles(); addSubModal.style.display = 'flex'; }
+            function hideAddSubModal() { addSubModal.style.display = 'none'; }
+            
+            addSubModal.addEventListener('click', (e) => { if (e.target === addSubModal) hideAddSubModal(); });
+            addSubModal.querySelector('#btnSubCancel').addEventListener('click', hideAddSubModal);
+            addSubModal.querySelector('#btnSubOk').addEventListener('click', async () => {
+                try {
+                    const target = (addSubModal.querySelector('input[name="addTarget"]:checked')||{}).value || 'original';
+                    const fontSize = Number(document.getElementById('subFontSize').value) || 72;
+                    const bottomPercent = Number(document.getElementById('subBottomPct').value) || 20;
+                    const videoUrl = target === 'original' ? originalVideoUrl : (videoEl.currentSrc || videoEl.src);
+
+                    if (!videoUrl) { alert('未找到目标视频'); return; }
+                    if (!cues || cues.length === 0) { alert('没有字幕数据'); return; }
+
+                    const payload = {
+                        video_url: videoUrl,
+                        font_size: fontSize,
+                        bottom_percent: bottomPercent,
+                        subtitles: cues.map((c, index) => ({
+                            line: index + 1,
+                            start_time: Number(c.start) || 0,
+                            end_time: Number(c.end) || 0,
+                            // 优先使用翻译文本，其次回退到原文
+                            text: String((c.translated_text && c.translated_text.trim()) || (c.translation && c.translation.trim()) || c.text || '').trim()
+                        })),
+                        subtitle_file: (document.getElementById('subFileSelect')||{}).value || ''
+                    };
+
+                    showSynthModal('正在添加字幕，请稍候...');
+                    const res = await fetch(`/viewer_api/${taskId}/add_subtitles`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                    });
+                    const data = await res.json();
+                    if (data && data.code === 0 && data.output_url) {
+                        hideAddSubModal();
+                        hideSynthModal();
+                        videoEl.src = data.output_url;
+                        try { videoEl.load(); videoEl.play(); } catch(e){}
+                    } else {
+                        hideSynthModal();
+                        alert(data && data.msg ? data.msg : '添加字幕失败');
+                    }
+                } catch (err) {
+                    hideSynthModal();
+                    console.error(err);
+                    alert('添加字幕失败');
+                }
+            });
 
             function fmtMs(ms) {
                 const s = Math.floor(ms/1000); const hh = String(Math.floor(s/3600)).padStart(2,'0');
@@ -1432,56 +1536,12 @@ if __name__ == '__main__':
                 }
             }
 
-            async function onVoiceDubbing() {
-                try {
-                    if (!cues || cues.length === 0) {
-                        alert('没有字幕数据，无法进行配音');
-                        return;
-                    }
-                    
-                    // 检查是否有说话人信息
-                    const hasSpeakers = cues.some(c => c.speaker && c.speaker.trim());
-                    if (!hasSpeakers) {
-                        alert('字幕中没有说话人信息，请先为字幕分配说话人');
-                        return;
-                    }
-                    
-                    const confirmed = confirm('开始智能配音？这将为每个说话人分配不同的音色，并去除原视频人声。');
-                    if (!confirmed) return;
-                    
-                    // 将字幕数据转换为完整的JSON格式，包含所有必要的时间字段
-                    const payload = { 
-                        subtitles: cues.map((c, index) => ({
-                            line: index + 1,
-                            start_time: Number(c.start) || 0,
-                            end_time: Number(c.end) || 0,
-                            startraw: c.startraw || '',
-                            endraw: c.endraw || '',
-                            time: `${c.startraw || ''} --> ${c.endraw || ''}`,
-                            text: String(c.text || '').trim(),
-                            speaker: String(c.speaker || '').trim(),
-                        }))
-                    };
-                    
-                    console.log('发送配音请求数据:', payload);
-                    
-                    const res = await fetch(`/viewer_api/${taskId}/voice_dubbing`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                    const data = await res.json();
-                    if (data && data.code === 0) {
-                        alert('配音任务已启动，请稍后查看结果');
-                        // 可以跳转到任务状态页面
-                        window.open(`/dubbing_result/${data.task_id}`, '_blank');
-                    } else {
-                        alert(data && data.msg ? data.msg : '配音启动失败');
-                    }
-                } catch (e) {
-                    console.error(e);
-                    alert('配音启动失败');
+            function onAddSubtitles() {
+                if (!cues || cues.length === 0) {
+                    alert('没有字幕数据，无法添加字幕');
+                    return;
                 }
+                showAddSubModal();
             }
 
             async function onGenerateTTS() {
@@ -2088,7 +2148,7 @@ if __name__ == '__main__':
             btnGenerateAudio.addEventListener('click', onGenerateAudio);
             btnSynthesizeAudio.addEventListener('click', onSynthesizeAudio);
             btnSynthesizeVideo.addEventListener('click', onSynthesizeVideo);
-            btnVoiceDubbing.addEventListener('click', onVoiceDubbing);
+            btnAddSubtitles.addEventListener('click', onAddSubtitles);
             btnSaveSrt.addEventListener('click', onSaveSrt);
             btnSaveJson.addEventListener('click', onSaveJson);
             </script>
@@ -2559,13 +2619,16 @@ if __name__ == '__main__':
                 from videotrans.util import help_srt
                 import time
                 
-                # 创建翻译后的SRT内容
+                # 创建翻译后的SRT内容（携带原始时间，单位毫秒）
                 srt_list = []
                 for i, subtitle in enumerate(translated_subtitles):
+                    # 前端传入的是 start_time/end_time（毫秒）；保持毫秒不变
+                    st = int(subtitle.get('start_time', subtitle.get('start', 0)) or 0)
+                    et = int(subtitle.get('end_time', subtitle.get('end', 0)) or 0)
                     srt_list.append({
                         'line': i + 1,
-                        'start_time': subtitle.get('start', 0),
-                        'end_time': subtitle.get('end', 0),
+                        'start_time': st,
+                        'end_time': et,
                         'text': subtitle.get('text', ''),
                     })
                 
@@ -2612,13 +2675,15 @@ if __name__ == '__main__':
             subtitles = data['subtitles']
             target_language = data['target_language']
             
-            # 创建翻译后的SRT内容
+            # 创建翻译后的SRT内容（携带时间，单位毫秒）
             srt_list = []
             for i, subtitle in enumerate(subtitles):
+                st = int(subtitle.get('start_time', subtitle.get('start', 0)) or 0)
+                et = int(subtitle.get('end_time', subtitle.get('end', 0)) or 0)
                 srt_list.append({
                     'line': i + 1,
-                    'start_time': subtitle.get('start', 0),
-                    'end_time': subtitle.get('end', 0),
+                    'start_time': st,
+                    'end_time': et,
                     'text': subtitle.get('translated_text', ''),
                 })
             
@@ -3177,6 +3242,502 @@ if __name__ == '__main__':
             import traceback
             traceback.print_exc()
             return jsonify({"code": 1, "msg": f"生成音频失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/add_subtitles', methods=['POST'])
+    def viewer_add_subtitles(task_id):
+        """为指定视频烧录字幕（ASS），支持字体大小与底部距离百分比设置。
+
+        请求体: {
+            video_url: string 目标视频URL（原视频或当前播放的视频）
+            font_size: int 字体大小（像素）
+            bottom_percent: int 距离底部百分比（0-40）
+            subtitles: [{start_time:int(ms), end_time:int(ms), text:str}, ...]
+        }
+        返回: {code:0, output_url:string}
+        """
+        try:
+            data = request.get_json(silent=True) or {}
+            video_url = data.get('video_url', '')
+            font_size = int(data.get('font_size', 72))
+            bottom_percent = max(0, min(40, int(data.get('bottom_percent', 20))))
+            items = data.get('subtitles', [])
+            subtitle_file_url = (data.get('subtitle_file') or '').strip()
+
+            if not video_url:
+                return jsonify({"code": 1, "msg": "缺少 video_url"}), 400
+            if not subtitle_file_url and (not isinstance(items, list) or len(items) < 1):
+                return jsonify({"code": 1, "msg": "缺少字幕数据"}), 400
+
+            # 将 video_url 映射到本地路径
+            # 允许 full url 或 '/apidata/...'
+            src_path = None
+            try:
+                # 截取 '/apidata/' 之后的相对路径
+                marker = f'/{API_RESOURCE}/'
+                if marker in video_url:
+                    rel = video_url.split(marker, 1)[1]
+                    src_path = Path(TARGET_DIR) / rel
+                else:
+                    # 尝试当作相对路径
+                    if video_url.startswith('/'):
+                        src_path = Path(TARGET_DIR) / video_url.lstrip('/').split(f'{API_RESOURCE}/')[-1]
+                    else:
+                        src_path = Path(video_url)
+            except Exception:
+                pass
+
+            if not src_path or not src_path.exists():
+                return jsonify({"code": 1, "msg": "目标视频不存在或不可访问"}), 400
+
+            # 探测分辨率
+            import subprocess
+            probe = subprocess.run([
+                'ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height',
+                '-of', 'csv=s=x:p=0', str(src_path)
+            ], capture_output=True, text=True)
+            if probe.returncode != 0 or 'x' not in probe.stdout:
+                return jsonify({"code": 1, "msg": "无法探测视频分辨率"}), 500
+            w, h = [int(x) for x in probe.stdout.strip().split('x')]
+
+            # 输出文件（写入当前任务目录）
+            out_path = Path(TARGET_DIR) / task_id / f"subtitled_{int(time.time())}.mp4"
+            from videotrans.util import tools
+            margin_lr = int(w * 0.1)  # 左右各10%，总80%有效宽度
+            margin_v = int(h * (bottom_percent / 100.0))
+
+            if subtitle_file_url:
+                # 使用已有字幕文件。如果是 .ass 直接烧录；如果是 .srt/.vtt，则先转换为 ASS（应用样式），再烧录。
+                marker = f'/{API_RESOURCE}/'
+                if marker in subtitle_file_url:
+                    rel = subtitle_file_url.split(marker, 1)[1]
+                    sub_src = Path(TARGET_DIR) / rel
+                else:
+                    sub_src = Path(subtitle_file_url)
+                if not sub_src.exists():
+                    return jsonify({"code": 1, "msg": "字幕文件不存在"}), 400
+
+                if sub_src.suffix.lower() == '.ass':
+                    # 强制样式以实现 80% 宽度与居中、自动换行
+                    force_style = f"WrapStyle=2,Alignment=2,MarginL={margin_lr},MarginR={margin_lr},MarginV={margin_v}"
+                    vf = f"subtitles=filename={sub_src.as_posix()}:force_style='{force_style}'"
+                    cmd = ['-y', '-i', str(src_path), '-vf', vf, '-loglevel', 'info', '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-c:a', 'copy', str(out_path)]
+                    print("[AddSubtitles] FFmpeg command:", 'ffmpeg', *cmd)
+                    try:
+                        from videotrans.util import tools as _t
+                        _t.set_process(text=f"FFmpeg: ffmpeg {' '.join(cmd)}", uuid=task_id)
+                    except Exception:
+                        pass
+                    tools.runffmpeg(cmd)
+                else:
+                    # 解析 SRT/VTT -> items，然后走统一的 ASS 生成逻辑
+                    try:
+                        items = parse_srt_file_to_items(sub_src)
+                    except Exception:
+                        items = []
+                    if not items:
+                        return jsonify({"code": 1, "msg": "无法解析字幕文件"}), 400
+                    # 下面与无文件分支相同：根据 items 生成 ASS，并走 FFmpeg 烧录
+                    ass_path = Path(TARGET_DIR) / task_id / f"subtitles_{int(time.time())}.ass"
+                    ass_path.parent.mkdir(parents=True, exist_ok=True)
+                    def fmt_time(ms: int) -> str:
+                        ms = max(0, int(ms))
+                        cs = int((ms % 1000) / 10)
+                        s = ms // 1000
+                        hh = s // 3600
+                        mm = (s % 3600) // 60
+                        ss = s % 60
+                        return f"{hh}:{mm:02d}:{ss:02d}.{cs:02d}"
+                    def wrap_text_for_ass(t: str, max_chars: int) -> str:
+                        """按最大字符数粗略换行，尽量按空格断行；无空格则按字符数断行。"""
+                        t = (t or '').replace('\r', '')
+                        lines = []
+                        for raw_line in t.split('\n'):
+                            s = raw_line.strip()
+                            if not s:
+                                lines.append('')
+                                continue
+                            words = s.split(' ')
+                            if len(words) > 1:
+                                cur = ''
+                                for w2 in words:
+                                    if cur == '':
+                                        nxt = w2
+                                    else:
+                                        nxt = cur + ' ' + w2
+                                    if len(nxt) <= max_chars:
+                                        cur = nxt
+                                    else:
+                                        if cur:
+                                            lines.append(cur)
+                                        cur = w2
+                                if cur:
+                                    lines.append(cur)
+                            else:
+                                # 无空格，按字符数硬切
+                                s2 = s
+                                while len(s2) > max_chars:
+                                    lines.append(s2[:max_chars])
+                                    s2 = s2[max_chars:]
+                                if s2:
+                                    lines.append(s2)
+                        return '\\N'.join(lines)
+
+                    def esc_text(t: str) -> str:
+                        # 先换行，再做转义；保留 \N 作为换行
+                        t2 = t or ''
+                        max_text_width = int(w * 0.8)
+                        est_char_w = max(1, int(font_size * 0.6))
+                        max_chars = max(8, int(max_text_width / est_char_w))
+                        t2 = wrap_text_for_ass(t2, max_chars)
+                        placeholder = '<<__ASS_NL__>>'
+                        t2 = t2.replace('\\N', placeholder)
+                        t2 = t2.replace('\\', '\\\\').replace('{', '(').replace('}', ')')
+                        t2 = t2.replace(placeholder, '\\N')
+                        return t2
+                    ass_lines = []
+                    ass_lines.append('[Script Info]')
+                    ass_lines.append('ScriptType: v4.00+')
+                    ass_lines.append(f'PlayResX: {w}')
+                    ass_lines.append(f'PlayResY: {h}')
+                    ass_lines.append('WrapStyle: 2')
+                    ass_lines.append('ScaledBorderAndShadow: yes')
+                    ass_lines.append('')
+                    ass_lines.append('[V4+ Styles]')
+                    ass_lines.append('Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, '
+                                      'Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, '
+                                      'Shadow, Alignment, MarginL, MarginR, MarginV, Encoding')
+                    ass_lines.append(
+                        f"Style: Default,Arial,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,3,0,2,{margin_lr},{margin_lr},{margin_v},0"
+                    )
+                    ass_lines.append('')
+                    ass_lines.append('[Events]')
+                    ass_lines.append('Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text')
+                    for it in items:
+                        st = fmt_time(int(it.get('start_time', 0)))
+                        et = fmt_time(int(it.get('end_time', 0)))
+                        txt = esc_text(str(it.get('text', '')))
+                        ass_lines.append(f"Dialogue: 0,{st},{et},Default,,0000,0000,0000,,{txt}")
+                    ass_path.write_text('\n'.join(ass_lines), encoding='utf-8')
+                    vf = f"subtitles=filename={ass_path.as_posix()}"
+                    cmd = ['-y', '-i', str(src_path), '-vf', vf, '-loglevel', 'info', '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-c:a', 'copy', str(out_path)]
+                    print("[AddSubtitles] FFmpeg command:", 'ffmpeg', *cmd)
+                    try:
+                        from videotrans.util import tools as _t
+                        _t.set_process(text=f"FFmpeg: ffmpeg {' '.join(cmd)}", uuid=task_id)
+                    except Exception:
+                        pass
+                    tools.runffmpeg(cmd)
+            else:
+                # 生成 ASS 文件后烧录
+                ass_path = Path(TARGET_DIR) / task_id / f"subtitles_{int(time.time())}.ass"
+                ass_path.parent.mkdir(parents=True, exist_ok=True)
+
+                def fmt_time(ms: int) -> str:
+                    ms = max(0, int(ms))
+                    cs = int((ms % 1000) / 10)  # centiseconds
+                    s = ms // 1000
+                    hh = s // 3600
+                    mm = (s % 3600) // 60
+                    ss = s % 60
+                    return f"{hh}:{mm:02d}:{ss:02d}.{cs:02d}"
+
+                def wrap_text_for_ass(t: str, max_chars: int) -> str:
+                    t = (t or '').replace('\r', '')
+                    lines = []
+                    for raw_line in t.split('\n'):
+                        s = raw_line.strip()
+                        if not s:
+                            lines.append('')
+                            continue
+                        words = s.split(' ')
+                        if len(words) > 1:
+                            cur = ''
+                            for w2 in words:
+                                if cur == '':
+                                    nxt = w2
+                                else:
+                                    nxt = cur + ' ' + w2
+                                if len(nxt) <= max_chars:
+                                    cur = nxt
+                                else:
+                                    if cur:
+                                        lines.append(cur)
+                                    cur = w2
+                            if cur:
+                                lines.append(cur)
+                        else:
+                            s2 = s
+                            while len(s2) > max_chars:
+                                lines.append(s2[:max_chars])
+                                s2 = s2[max_chars:]
+                            if s2:
+                                lines.append(s2)
+                    return '\\N'.join(lines)
+
+                def esc_text(t: str) -> str:
+                    # 预换行再转义；保留 \N 作为换行
+                    max_text_width = int(w * 0.8)
+                    est_char_w = max(1, int(font_size * 0.6))
+                    max_chars = max(8, int(max_text_width / est_char_w))
+                    t2 = wrap_text_for_ass(t or '', max_chars)
+                    placeholder = '<<__ASS_NL__>>'
+                    t2 = t2.replace('\\N', placeholder)
+                    t2 = t2.replace('\\', '\\\\').replace('{', '(').replace('}', ')')
+                    t2 = t2.replace(placeholder, '\\N')
+                    return t2
+
+                ass_lines = []
+                ass_lines.append('[Script Info]')
+                ass_lines.append('ScriptType: v4.00+')
+                ass_lines.append(f'PlayResX: {w}')
+                ass_lines.append(f'PlayResY: {h}')
+                ass_lines.append('WrapStyle: 2')
+                ass_lines.append('ScaledBorderAndShadow: yes')
+                ass_lines.append('')
+                ass_lines.append('[V4+ Styles]')
+                ass_lines.append('Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, '
+                                  'Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, '
+                                  'Shadow, Alignment, MarginL, MarginR, MarginV, Encoding')
+                ass_lines.append(
+                    f"Style: Default,Arial,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,3,0,2,{margin_lr},{margin_lr},{margin_v},0"
+                )
+                ass_lines.append('')
+                ass_lines.append('[Events]')
+                ass_lines.append('Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text')
+                for it in items:
+                    st = fmt_time(int(it.get('start_time', 0)))
+                    et = fmt_time(int(it.get('end_time', 0)))
+                    txt = esc_text(str(it.get('text', '')))
+                    ass_lines.append(f"Dialogue: 0,{st},{et},Default,,0000,0000,0000,,{txt}")
+
+                ass_path.write_text('\n'.join(ass_lines), encoding='utf-8')
+
+                vf = f"subtitles=filename={ass_path.as_posix()}"
+                cmd = ['-y', '-i', str(src_path), '-vf', vf, '-loglevel', 'info', '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-c:a', 'copy', str(out_path)]
+                # 打印与记录 FFmpeg 命令，便于排查
+                print("[AddSubtitles] FFmpeg command:", 'ffmpeg', *cmd)
+                try:
+                    from videotrans.util import tools as _t
+                    _t.set_process(text=f"FFmpeg: ffmpeg {' '.join(cmd)}", uuid=task_id)
+                except Exception:
+                    pass
+                try:
+                    tools.runffmpeg(cmd)
+                except Exception:
+                    print('[AddSubtitles] FFmpeg failed. Fallback to OpenCV burn (items).')
+                    ok3 = burn_subtitles_with_opencv(
+                        str(src_path), items, str(out_path),
+                        font_size=font_size, bottom_percent=bottom_percent
+                    )
+                    if not ok3:
+                        raise
+
+            if not out_path.exists():
+                return jsonify({"code": 1, "msg": "字幕烧录失败"}), 500
+
+            return jsonify({
+                "code": 0,
+                "msg": "ok",
+                "output_url": f'/{API_RESOURCE}/{task_id}/{out_path.name}'
+            })
+
+        except Exception as e:
+            print(f"添加字幕失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"code": 1, "msg": f"添加字幕失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/list_subtitle_files', methods=['GET'])
+    def viewer_list_subtitle_files(task_id):
+        """列出任务目录下可用的字幕文件（srt/ass/vtt/json）。"""
+        try:
+            task_dir = Path(TARGET_DIR) / task_id
+            if not task_dir.exists():
+                return jsonify({"code": 1, "msg": "任务不存在", "files": []}), 404
+
+            exts = {'.srt', '.ass', '.vtt', '.json'}
+            files = []
+            for f in sorted(task_dir.iterdir()):
+                if f.is_file() and f.suffix.lower() in exts:
+                    files.append({
+                        'name': f.name,
+                        'url': f'/{API_RESOURCE}/{task_id}/{f.name}'
+                    })
+            return jsonify({"code": 0, "files": files})
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"列出失败: {str(e)}", "files": []}), 500
+
+    def parse_srt_file_to_items(srt_path):
+        """将 SRT 文件解析为 items 列表: [{start_time,end_time,text}]"""
+        try:
+            content = Path(srt_path).read_text(encoding='utf-8')
+        except Exception:
+            content = Path(srt_path).read_text(encoding='latin-1')
+
+        import re
+        blocks = re.split(r'\n\s*\n', content.strip())
+        items = []
+        def t2ms(t):
+            # 00:00:00,000 或 00:00:00.000
+            t = t.replace('.', ',')
+            h, m, s_ms = t.split(':')
+            s, ms = s_ms.split(',')
+            return (int(h)*3600 + int(m)*60 + int(s))*1000 + int(ms)
+        for b in blocks:
+            lines = [ln for ln in b.splitlines() if ln.strip()]
+            if len(lines) < 2:
+                continue
+            # 找到时间行
+            time_idx = None
+            for i, ln in enumerate(lines[:3]):
+                if '-->' in ln:
+                    time_idx = i
+                    break
+            if time_idx is None:
+                continue
+            time_line = lines[time_idx]
+            text_lines = lines[time_idx+1:]
+            l, r = [t.strip() for t in time_line.split('-->')]
+            st = t2ms(l)
+            et = t2ms(r)
+            text = '\n'.join(text_lines)
+            items.append({'start_time': st, 'end_time': et, 'text': text})
+        return items
+
+    def _find_font_path_candidates():
+        return [
+            '/System/Library/Fonts/Supplemental/Arial.ttf',
+            '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
+            '/Library/Fonts/Arial.ttf',
+            '/Library/Fonts/Arial Unicode.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            'C:/Windows/Fonts/arial.ttf',
+        ]
+
+    def burn_subtitles_with_opencv(video_path, items, output_path, font_size=72, bottom_percent=20, width_ratio=0.8):
+        """使用 OpenCV+Pillow 将给定字幕事件烧录到视频。
+
+        items: list of {start_time(ms), end_time(ms), text}
+        输出先生成无音频视频，再用 ffmpeg 将原视频音频复用到输出。
+        """
+        try:
+            import cv2
+            import numpy as np
+            from PIL import Image, ImageDraw, ImageFont
+        except Exception as e:
+            print(f'缺少依赖: {e}. 需要安装 opencv-python 与 pillow')
+            return False
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print('无法打开视频:', video_path)
+            return False
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        out_noaudio = Path(output_path).with_suffix('.noaudio.mp4')
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(out_noaudio.as_posix(), fourcc, fps, (width, height))
+        if not writer.isOpened():
+            print('无法创建输出视频:', out_noaudio)
+            cap.release()
+            return False
+
+        # 字体
+        font_path = None
+        for p in _find_font_path_candidates():
+            if Path(p).exists():
+                font_path = p
+                break
+        try:
+            font = ImageFont.truetype(font_path or 'Arial', max(12, int(font_size)))
+        except Exception:
+            font = ImageFont.load_default()
+
+        max_text_width = int(width * width_ratio)
+        margin_v = int(height * (bottom_percent / 100.0))
+
+        def wrap_text(txt, draw):
+            # 按宽度换行（逐字符，兼容中西文）
+            parts = txt.replace('\r', '').split('\n')
+            lines = []
+            for block in parts:
+                line = ''
+                for ch in block:
+                    test = line + ch
+                    w, _ = draw.textsize(test, font=font)
+                    if w <= max_text_width:
+                        line = test
+                    else:
+                        if line:
+                            lines.append(line)
+                        line = ch
+                if line:
+                    lines.append(line)
+            return lines
+
+        items_sorted = sorted(items, key=lambda x: x.get('start_time', 0))
+        idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            cur_ms = int(idx * 1000.0 / fps)
+
+            # 当前字幕
+            txt = ''
+            for it in items_sorted:
+                if it.get('start_time', 0) <= cur_ms < it.get('end_time', 0):
+                    txt = it.get('text', '')
+                if it.get('start_time', 0) > cur_ms:
+                    break
+
+            if txt:
+                img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                draw = ImageDraw.Draw(img)
+                lines = wrap_text(txt, draw)
+                # 文本块高度估计
+                bbox = font.getbbox('Hg')
+                lh = bbox[3] - bbox[1]
+                total_h = int(len(lines) * lh * 1.2)
+                y0 = height - margin_v - total_h
+                for i2, line in enumerate(lines):
+                    w_text, _ = draw.textsize(line, font=font)
+                    x = int((width - w_text) / 2)
+                    y = int(y0 + i2 * lh * 1.2)
+                    draw.text((x, y), line, font=font, fill=(255,255,255,255), stroke_width=3, stroke_fill=(0,0,0,255))
+                frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+
+            writer.write(frame)
+            idx += 1
+
+        writer.release()
+        cap.release()
+
+        # 复用原视频音频
+        try:
+            from videotrans.util import tools as _t
+            mux_cmd = [
+                '-y', '-i', out_noaudio.as_posix(), '-i', video_path,
+                '-c:v', 'copy', '-map', '0:v:0', '-map', '1:a:0?', '-c:a', 'aac', '-b:a', '128k', '-shortest', output_path
+            ]
+            print('[AddSubtitles][OpenCV] FFmpeg mux audio:', 'ffmpeg', *mux_cmd)
+            _t.runffmpeg(mux_cmd)
+        except Exception as e:
+            print('[AddSubtitles][OpenCV] 复用音频失败:', e)
+            try:
+                Path(output_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+            out_noaudio.replace(output_path)
+
+        try:
+            out_noaudio.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return Path(output_path).exists()
 
     def generate_tts_audio(text, voice_id, output_file, speaking_rate=None):
         """使用ElevenLabs生成TTS音频，支持可选语速speaking_rate（倍率）。"""
