@@ -325,16 +325,114 @@ if __name__ == '__main__':
                 header {{ padding: 12px 16px; border-bottom: 1px solid #eee; display:flex; gap:12px; align-items:center; }}
                 header .task {{ color:#666; font-size:12px; }}
                 .container {{ display: grid; grid-template-columns: 360px 1fr; gap: 12px; height: calc(100vh - 60px); padding: 12px; box-sizing: border-box; }}
-                .list {{ border: 1px solid #e5e5e5; border-radius: 8px; overflow: auto; padding: 8px; }}
-                .item {{ padding: 8px; border-radius: 6px; cursor: pointer; margin-bottom: 6px; }}
-                .item:hover {{ background: #f7f7f7; }}
-                .item.active {{ background: #e9f3ff; }}
-                .time {{ color:#666; font-size:12px; }}
-                .speakerSel {{ margin-left: 8px; padding: 2px 6px; font-size: 12px; }}
-                .textEdit {{ width: 100%; box-sizing: border-box; resize: vertical; min-height: 38px; font-size: 14px; line-height: 1.4; padding: 6px 8px; border: 1px solid #ddd; border-radius: 6px; }}
+                .list {{ 
+                    border: 1px solid #e5e5e5; 
+                    border-radius: 8px; 
+                    overflow: auto; 
+                    padding: 6px; 
+                    background: #fafafa;
+                    max-height: 70vh;
+                }}
+                .item {{ 
+                    padding: 6px 8px; 
+                    border-radius: 6px; 
+                    cursor: pointer; 
+                    margin-bottom: 4px; 
+                    border: 1px solid transparent;
+                    transition: all 0.2s ease;
+                    background: white;
+                }}
+                .item:hover {{ 
+                    background: #f0f8ff; 
+                    border-color: #007AFF;
+                    transform: translateY(-1px);
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }}
+                .item.active {{ 
+                    background: #e9f3ff; 
+                    border-color: #007AFF;
+                    box-shadow: 0 2px 8px rgba(0,122,255,0.2);
+                }}
+                .time {{ 
+                    color: #666; 
+                    font-size: 11px; 
+                    font-weight: 500;
+                    margin-bottom: 4px;
+                    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+                }}
+                .speakerSel {{ 
+                    margin-right: 8px; 
+                    padding: 2px 6px; 
+                    font-size: 11px; 
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    background: white;
+                    min-width: 60px;
+                }}
+                .textEdit {{ 
+                    width: 100%; 
+                    box-sizing: border-box; 
+                    resize: vertical; 
+                    min-height: 32px; 
+                    font-size: 13px; 
+                    line-height: 1.3; 
+                    padding: 4px 6px; 
+                    border: 1px solid #ddd; 
+                    border-radius: 4px;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                }}
+                .textEdit:focus {{
+                    outline: none;
+                    border-color: #007AFF;
+                    box-shadow: 0 0 0 2px rgba(0,122,255,0.1);
+                }}
+                
+                /* 滚动条样式 */
+                .list::-webkit-scrollbar {{
+                    width: 6px;
+                }}
+                .list::-webkit-scrollbar-track {{
+                    background: #f1f1f1;
+                    border-radius: 3px;
+                }}
+                .list::-webkit-scrollbar-thumb {{
+                    background: #c1c1c1;
+                    border-radius: 3px;
+                }}
+                .list::-webkit-scrollbar-thumb:hover {{
+                    background: #a8a8a8;
+                }}
+                
+                /* 字幕项编号 */
+                .item::before {{
+                    content: attr(data-idx);
+                    position: absolute;
+                    left: -20px;
+                    top: 6px;
+                    font-size: 10px;
+                    color: #999;
+                    font-weight: 500;
+                }}
+                .item {{
+                    position: relative;
+                    padding-left: 24px;
+                }}
                 .player {{ display:flex; flex-direction: column; gap: 8px; }}
                 .timeline-wrap {{ border:1px solid #e5e5e5; border-radius:8px; padding:8px; }}
-                canvas {{ width: 100%; height: 120px; display:block; }}
+                canvas {{ width: 100%; height: 120px; display:block; cursor: grab; }}
+                .timeline-wrap:hover {{ border-color: #007AFF; }}
+                canvas:active {{ cursor: grabbing; }}
+                .drag-hint {{ 
+                    position: absolute; 
+                    background: rgba(0,0,0,0.8); 
+                    color: white; 
+                    padding: 4px 8px; 
+                    border-radius: 4px; 
+                    font-size: 12px; 
+                    pointer-events: none; 
+                    z-index: 1000;
+                    display: none;
+                }}
             </style>
         </head>
         <body>
@@ -357,8 +455,24 @@ if __name__ == '__main__':
                 <div class=\"list\" id=\"subList\"></div>
                 <div class=\"player\">
                     <video id=\"video\" src=\"((VIDEO_URL))\" controls crossorigin=\"anonymous\" style=\"width:100%;max-height:60vh;background:#000\"></video>
-                    <div class=\"timeline-wrap\">
+                    <div class=\"timeline-wrap\" style=\"position: relative;\">
+                        <div style=\"display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;\">
+                            <div style=\"font-size: 12px; color: #666;\">
+                                缩放: <span id=\"zoomLevel\">1x</span> | 
+                                可见范围: <span id=\"visibleRange\">0s - 0s</span> | 
+                                <span id=\"saveStatus\" style=\"color: #28a745;\">已保存</span> | 
+                                快捷键: R=重置 F=适应 ←→=平移 | 拖拽空白区域滑动
+                            </div>
+                            <div id=\"speakerLegend\" style=\"display: flex; gap: 8px; font-size: 11px;\"></div>
+                            <div>
+                                <button id=\"zoomIn\" style=\"padding: 2px 8px; margin-right: 4px; font-size: 12px;\">放大</button>
+                                <button id=\"zoomOut\" style=\"padding: 2px 8px; margin-right: 4px; font-size: 12px;\">缩小</button>
+                                <button id=\"zoomReset\" style=\"padding: 2px 8px; margin-right: 8px; font-size: 12px;\">重置</button>
+                                <button id=\"saveTimeline\" style=\"padding: 2px 8px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 3px;\">保存</button>
+                            </div>
+                        </div>
                         <canvas id=\"timeline\" width=\"1200\" height=\"120\"></canvas>
+                        <div id=\"dragHint\" class=\"drag-hint\"></div>
                     </div>
                 </div>
             </div>
@@ -377,9 +491,19 @@ if __name__ == '__main__':
             const btnSynthesizeVideo = document.getElementById('btnSynthesizeVideo');
             const btnSaveSrt = document.getElementById('btnSaveSrt');
             const btnSaveJson = document.getElementById('btnSaveJson');
+            const dragHint = document.getElementById('dragHint');
+            const zoomLevelEl = document.getElementById('zoomLevel');
+            const visibleRangeEl = document.getElementById('visibleRange');
+            const saveStatusEl = document.getElementById('saveStatus');
+            const speakerLegendEl = document.getElementById('speakerLegend');
+            const zoomInBtn = document.getElementById('zoomIn');
+            const zoomOutBtn = document.getElementById('zoomOut');
+            const zoomResetBtn = document.getElementById('zoomReset');
+            const saveTimelineBtn = document.getElementById('saveTimeline');
             let cues = [];
             let videoMs = 0;
             let speakers = [];
+            let speakerColors = {}; // 存储说话人对应的颜色
 
             function fmtMs(ms) {
                 const s = Math.floor(ms/1000); const hh = String(Math.floor(s/3600)).padStart(2,'0');
@@ -387,6 +511,52 @@ if __name__ == '__main__':
                 const ss = String(s%60).padStart(2,'0');
                 const mmm = String(ms%1000).padStart(3,'0');
                 return `${hh}:${mm}:${ss},${mmm}`;
+            }
+
+            // 预定义的颜色调色板
+            const colorPalette = [
+                '#4e8cff', // 蓝色
+                '#ff6b6b', // 红色
+                '#4ecdc4', // 青色
+                '#45b7d1', // 天蓝色
+                '#96ceb4', // 绿色
+                '#feca57', // 黄色
+                '#ff9ff3', // 粉色
+                '#54a0ff', // 亮蓝色
+                '#5f27cd', // 紫色
+                '#00d2d3', // 青绿色
+                '#ff9f43', // 橙色
+                '#10ac84', // 深绿色
+                '#ee5a24', // 深橙色
+                '#0984e3', // 深蓝色
+                '#6c5ce7', // 紫罗兰
+                '#a29bfe', // 淡紫色
+                '#fd79a8', // 玫瑰色
+                '#fdcb6e', // 淡黄色
+                '#e17055', // 珊瑚色
+                '#74b9ff'  // 浅蓝色
+            ];
+
+            // 为说话人分配颜色
+            function assignSpeakerColor(speaker) {
+                if (!speaker || speaker.trim() === '') return '#cddffd'; // 默认颜色
+                
+                if (speakerColors[speaker]) {
+                    return speakerColors[speaker];
+                }
+                
+                // 获取已使用的颜色
+                const usedColors = Object.values(speakerColors);
+                let colorIndex = 0;
+                
+                // 找到第一个未使用的颜色
+                while (usedColors.includes(colorPalette[colorIndex]) && colorIndex < colorPalette.length - 1) {
+                    colorIndex++;
+                }
+                
+                const color = colorPalette[colorIndex];
+                speakerColors[speaker] = color;
+                return color;
             }
 
             function renderList() {
@@ -401,6 +571,10 @@ if __name__ == '__main__':
                     t.className = 'time';
                     t.textContent = `${c.startraw} → ${c.endraw}`;
                     const tx = document.createElement('div');
+                    tx.style.display = 'flex';
+                    tx.style.gap = '6px';
+                    tx.style.alignItems = 'flex-start';
+                    
                     const sel = document.createElement('select');
                     sel.className = 'speakerSel';
                     const spkSet = new Set(speakers || []);
@@ -411,41 +585,60 @@ if __name__ == '__main__':
                         opt.value = s; opt.textContent = s; sel.appendChild(opt);
                     });
                     sel.value = c.speaker || '';
-                    sel.addEventListener('change', () => { c.speaker = sel.value; });
+                    sel.addEventListener('change', () => { 
+                        c.speaker = sel.value; 
+                        triggerAutoSave(); // 说话人修改时也触发自动保存
+                    });
+                    
+                    const contentWrapper = document.createElement('div');
+                    contentWrapper.style.flex = '1';
+                    contentWrapper.style.minWidth = '0';
+                    
                     const content = document.createElement('textarea');
                     content.className = 'textEdit';
                     content.value = c.text || '';
-                    content.addEventListener('input', () => { c.text = content.value; });
-                    tx.appendChild(sel); tx.appendChild(content);
+                    content.addEventListener('input', () => { 
+                        c.text = content.value; 
+                        triggerAutoSave(); // 文本修改时也触发自动保存
+                    });
+                    
+                    contentWrapper.appendChild(content);
+                    tx.appendChild(sel); 
+                    tx.appendChild(contentWrapper);
                     
                     // 如果有翻译后的字幕，显示在下面并支持编辑
                     if (c.translated_text) {
                         const translatedDiv = document.createElement('div');
-                        translatedDiv.style.marginTop = '4px';
-                        translatedDiv.style.padding = '4px 8px';
-                        translatedDiv.style.backgroundColor = '#f0f8ff';
-                        translatedDiv.style.border = '1px solid #b3d9ff';
+                        translatedDiv.style.marginTop = '6px';
+                        translatedDiv.style.padding = '6px 8px';
+                        translatedDiv.style.backgroundColor = '#f8f9fa';
+                        translatedDiv.style.border = '1px solid #e9ecef';
                         translatedDiv.style.borderRadius = '4px';
-                        translatedDiv.style.fontSize = '13px';
-                        translatedDiv.style.color = '#0066cc';
+                        translatedDiv.style.fontSize = '12px';
                         
                         // 创建翻译标签
                         const translatedLabel = document.createElement('div');
                         translatedLabel.style.marginBottom = '4px';
-                        translatedLabel.innerHTML = '<strong>翻译:</strong>';
+                        translatedLabel.style.fontSize = '11px';
+                        translatedLabel.style.fontWeight = '600';
+                        translatedLabel.style.color = '#6c757d';
+                        translatedLabel.innerHTML = '🌐 翻译:';
                         
                         // 创建可编辑的翻译文本框
                         const translatedInput = document.createElement('textarea');
                         translatedInput.value = c.translated_text;
                         translatedInput.style.width = '100%';
-                        translatedInput.style.minHeight = '40px';
-                        translatedInput.style.padding = '4px';
-                        translatedInput.style.border = '1px solid #ccc';
+                        translatedInput.style.minHeight = '32px';
+                        translatedInput.style.padding = '4px 6px';
+                        translatedInput.style.border = '1px solid #dee2e6';
                         translatedInput.style.borderRadius = '3px';
                         translatedInput.style.fontSize = '12px';
                         translatedInput.style.resize = 'vertical';
+                        translatedInput.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+                        translatedInput.style.lineHeight = '1.3';
                         translatedInput.addEventListener('input', () => { 
                             c.translated_text = translatedInput.value; 
+                            triggerAutoSave(); // 翻译文本修改时也触发自动保存
                         });
                         
                         translatedDiv.appendChild(translatedLabel);
@@ -461,23 +654,141 @@ if __name__ == '__main__':
                 });
             }
 
+            // 拖拽相关变量
+            let isDragging = false;
+            let dragType = null; // 'start', 'end', 'move', 'pan'
+            let dragCueIndex = -1;
+            let dragStartX = 0;
+            let dragStartTime = 0;
+            let originalStartTime = 0;
+            let originalEndTime = 0;
+            let originalPanOffset = 0; // 用于平移拖拽
+            
+            // 缩放相关变量
+            let zoomLevel = 1;
+            let panOffset = 0; // 水平偏移
+
+            // 更新说话人图例
+            function updateSpeakerLegend() {
+                speakerLegendEl.innerHTML = '';
+                const uniqueSpeakers = [...new Set(cues.map(c => c.speaker).filter(s => s && s.trim()))];
+                
+                uniqueSpeakers.forEach(speaker => {
+                    const color = assignSpeakerColor(speaker);
+                    const legendItem = document.createElement('div');
+                    legendItem.style.display = 'flex';
+                    legendItem.style.alignItems = 'center';
+                    legendItem.style.gap = '4px';
+                    
+                    const colorBox = document.createElement('div');
+                    colorBox.style.width = '12px';
+                    colorBox.style.height = '12px';
+                    colorBox.style.backgroundColor = color;
+                    colorBox.style.borderRadius = '2px';
+                    colorBox.style.border = '1px solid #ccc';
+                    
+                    const speakerLabel = document.createElement('span');
+                    speakerLabel.textContent = speaker;
+                    speakerLabel.style.color = '#666';
+                    
+                    legendItem.appendChild(colorBox);
+                    legendItem.appendChild(speakerLabel);
+                    speakerLegendEl.appendChild(legendItem);
+                });
+            }
+
+            // 更新缩放和平移显示
+            function updateZoomDisplay() {
+                zoomLevelEl.textContent = zoomLevel.toFixed(1) + 'x';
+                const visibleDuration = videoMs / zoomLevel;
+                const startTime = panOffset;
+                const endTime = Math.min(videoMs, startTime + visibleDuration);
+                visibleRangeEl.textContent = `${fmtMs(startTime)} - ${fmtMs(endTime)}`;
+            }
+
             function drawTimeline(currentMs=0) {
                 const w = canvas.clientWidth; const h = canvas.height;
                 if (canvas.width !== w) canvas.width = w;
                 ctx.clearRect(0,0,canvas.width,canvas.height);
                 ctx.fillStyle = '#fafafa';
                 ctx.fillRect(0,0,canvas.width,canvas.height);
+                
                 const pad = 8; const barH = 24; const top = (canvas.height - barH)/2;
+                
+                // 计算可见时间范围
+                const visibleDuration = videoMs / zoomLevel;
+                const startTime = Math.max(0, panOffset);
+                const endTime = Math.min(videoMs, startTime + visibleDuration);
+                
+                // 绘制时间刻度
+                ctx.fillStyle = '#ddd';
+                ctx.font = '10px Arial';
+                ctx.textAlign = 'left';
+                const tickInterval = Math.max(1000, Math.floor(visibleDuration / 10)); // 至少1秒间隔
+                for (let time = Math.ceil(startTime / tickInterval) * tickInterval; time <= endTime; time += tickInterval) {
+                    const x = pad + ((time - startTime) / visibleDuration) * (canvas.width - 2*pad);
+                    ctx.fillRect(x, top + barH + 2, 1, 8);
+                    ctx.fillText(fmtMs(time), x + 2, top + barH + 12);
+                }
+                
                 cues.forEach((c, i) => {
-                    const x = Math.max(0, Math.floor((c.start / videoMs) * (canvas.width - 2*pad)) + pad);
-                    const wbar = Math.max(2, Math.floor(((c.end - c.start) / videoMs) * (canvas.width - 2*pad)));
-                    ctx.fillStyle = (currentMs>=c.start && currentMs<c.end) ? '#4e8cff' : '#cddffd';
+                    // 检查字幕是否在可见范围内
+                    if (c.end < startTime || c.start > endTime) return;
+                    
+                    const x = pad + ((c.start - startTime) / visibleDuration) * (canvas.width - 2*pad);
+                    const wbar = Math.max(2, ((c.end - c.start) / visibleDuration) * (canvas.width - 2*pad));
+                    
+                    // 根据说话人分配颜色
+                    const speakerColor = assignSpeakerColor(c.speaker);
+                    const isActive = currentMs >= c.start && currentMs < c.end;
+                    
+                    // 绘制字幕块背景
+                    ctx.fillStyle = isActive ? speakerColor : speakerColor + '80'; // 活跃时完全不透明，非活跃时半透明
                     ctx.fillRect(x, top, wbar, barH);
+                    
+                    // 绘制说话人标签（如果空间足够）
+                    if (wbar > 60 && c.speaker) {
+                        ctx.fillStyle = '#fff';
+                        ctx.font = 'bold 10px Arial';
+                        ctx.textAlign = 'left';
+                        const speakerText = c.speaker.length > 6 ? c.speaker.substring(0, 6) + '...' : c.speaker;
+                        ctx.fillText(speakerText, x + 4, top + 12);
+                    }
+                    
+                    // 绘制拖拽手柄
+                    if (wbar > 8) { // 只有当字幕块足够宽时才显示手柄
+                        // 开始时间手柄
+                        ctx.fillStyle = '#2c5aa0';
+                        ctx.fillRect(x - 2, top - 2, 4, barH + 4);
+                        
+                        // 结束时间手柄
+                        ctx.fillStyle = '#2c5aa0';
+                        ctx.fillRect(x + wbar - 2, top - 2, 4, barH + 4);
+                    }
+                    
+                    // 绘制字幕文本（如果空间足够）
+                    if (wbar > 100) {
+                        ctx.fillStyle = '#333';
+                        ctx.font = '11px Arial';
+                        ctx.textAlign = 'center';
+                        const text = c.text.substring(0, Math.floor(wbar/10));
+                        ctx.fillText(text, x + wbar/2, top + barH/2 + 6);
+                    }
                 });
-                const xnow = Math.floor((currentMs / videoMs) * (canvas.width - 2*pad)) + pad;
+                
+                // 绘制当前播放位置
+                if (currentMs >= startTime && currentMs <= endTime) {
+                    const xnow = pad + ((currentMs - startTime) / visibleDuration) * (canvas.width - 2*pad);
                 ctx.strokeStyle = '#ff3b30';
+                    ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.moveTo(xnow, 0); ctx.lineTo(xnow, canvas.height); ctx.stroke();
+                    ctx.lineWidth = 1;
+                }
+                
+                // 更新显示
+                updateZoomDisplay();
+                updateSpeakerLegend();
             }
 
             function updateActive(currentMs) {
@@ -494,10 +805,412 @@ if __name__ == '__main__':
                 drawTimeline(currentMs);
             }
 
-            canvas.addEventListener('click', (e) => {
+            // 检测鼠标位置对应的字幕块和拖拽类型
+            function getCueAtPosition(x, y) {
+                const pad = 8; const barH = 24; const top = (canvas.height - barH)/2;
+                const tolerance = 6; // 拖拽容差
+                
+                // 计算可见时间范围
+                const visibleDuration = videoMs / zoomLevel;
+                const startTime = Math.max(0, panOffset);
+                const endTime = Math.min(videoMs, startTime + visibleDuration);
+                
+                for (let i = 0; i < cues.length; i++) {
+                    const c = cues[i];
+                    
+                    // 检查字幕是否在可见范围内
+                    if (c.end < startTime || c.start > endTime) continue;
+                    
+                    const cueX = pad + ((c.start - startTime) / visibleDuration) * (canvas.width - 2*pad);
+                    const cueW = Math.max(2, ((c.end - c.start) / visibleDuration) * (canvas.width - 2*pad));
+                    
+                    if (y >= top - tolerance && y <= top + barH + tolerance) {
+                        if (x >= cueX - tolerance && x <= cueX + tolerance) {
+                            return { index: i, type: 'start' };
+                        } else if (x >= cueX + cueW - tolerance && x <= cueX + cueW + tolerance) {
+                            return { index: i, type: 'end' };
+                        } else if (x >= cueX && x <= cueX + cueW) {
+                            return { index: i, type: 'move' };
+                        }
+                    }
+                }
+                return null;
+            }
+
+            // 显示拖拽提示
+            function showDragHint(x, y, text) {
+                dragHint.textContent = text;
+                dragHint.style.display = 'block';
+                dragHint.style.left = (x + 10) + 'px';
+                dragHint.style.top = (y - 30) + 'px';
+            }
+
+            // 隐藏拖拽提示
+            function hideDragHint() {
+                dragHint.style.display = 'none';
+            }
+
+            // 自动保存定时器
+            let saveTimeout = null;
+            let isSaving = false;
+
+            // 更新保存状态显示
+            function updateSaveStatus(status, color = '#28a745') {
+                saveStatusEl.textContent = status;
+                saveStatusEl.style.color = color;
+            }
+
+            // 保存字幕到SRT文件（通用函数）
+            async function saveSubtitles(showStatus = true) {
+                if (isSaving) return;
+                
+                try {
+                    isSaving = true;
+                    if (showStatus) {
+                        updateSaveStatus('保存中...', '#ffc107');
+                    }
+                    
+                    // 收集所有字幕数据，包括时间和文字
+                    const payload = { 
+                        subtitles: cues.map(c => ({
+                            start: Number(c.start)||0,
+                            end: Number(c.end)||0,
+                            text: String(c.text||'').trim(),
+                            speaker: String(c.speaker||'').trim(),
+                        })), 
+                        srt_with_spk: true 
+                    };
+                    
+                    const res = await fetch(`/viewer_api/${taskId}/export_srt`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    const data = await res.json();
+                    if (data && data.code === 0) {
+                        if (showStatus) {
+                            updateSaveStatus('已保存', '#28a745');
+                            console.log('字幕已保存');
+                        }
+                        return true;
+                    } else {
+                        if (showStatus) {
+                            updateSaveStatus('保存失败', '#dc3545');
+                        }
+                        console.error('保存失败:', data && data.msg ? data.msg : '未知错误');
+                        return false;
+                    }
+                } catch (e) {
+                    if (showStatus) {
+                        updateSaveStatus('保存失败', '#dc3545');
+                    }
+                    console.error('保存失败:', e);
+                    return false;
+                } finally {
+                    isSaving = false;
+                }
+            }
+
+            // 自动保存字幕到SRT文件
+            async function autoSaveSubtitles() {
+                return await saveSubtitles(true);
+            }
+
+            // 触发自动保存（防抖）
+            function triggerAutoSave(immediate = false) {
+                if (saveTimeout) {
+                    clearTimeout(saveTimeout);
+                }
+                
+                if (immediate) {
+                    // 立即保存
+                    autoSaveSubtitles();
+                } else {
+                    // 延迟保存
+                    updateSaveStatus('有未保存的更改', '#ffc107');
+                    saveTimeout = setTimeout(() => {
+                        autoSaveSubtitles();
+                    }, 1000); // 1秒后自动保存
+                }
+            }
+
+            // 更新字幕时间
+            function updateCueTime(cueIndex, newStart, newEnd) {
+                if (cueIndex >= 0 && cueIndex < cues.length) {
+                    const cue = cues[cueIndex];
+                    cue.start = Math.max(0, newStart);
+                    cue.end = Math.max(cue.start + 100, newEnd); // 最小100ms间隔
+                    cue.startraw = fmtMs(cue.start);
+                    cue.endraw = fmtMs(cue.end);
+                    
+                    // 更新列表显示
+                    renderList();
+                    drawTimeline(videoEl.currentTime * 1000);
+                    
+                    // 触发自动保存
+                    triggerAutoSave();
+                }
+            }
+
+            // 将屏幕坐标转换为时间
+            function screenToTime(x) {
+                const pad = 8;
+                const visibleDuration = videoMs / zoomLevel;
+                const startTime = Math.max(0, panOffset);
+                const ratio = Math.min(1, Math.max(0, (x - pad) / (canvas.width - 2*pad)));
+                return startTime + ratio * visibleDuration;
+            }
+
+            // 鼠标按下事件
+            canvas.addEventListener('mousedown', (e) => {
                 const rect = canvas.getBoundingClientRect();
-                const x = e.clientX - rect.left; const pad = 8; const ratio = Math.min(1, Math.max(0, (x - pad) / (canvas.width - 2*pad)));
-                const ms = ratio * videoMs; videoEl.currentTime = ms / 1000;
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                const hit = getCueAtPosition(x, y);
+                if (hit) {
+                    isDragging = true;
+                    dragType = hit.type;
+                    dragCueIndex = hit.index;
+                    dragStartX = x;
+                    
+                    // 记录原始时间
+                    const cue = cues[dragCueIndex];
+                    originalStartTime = cue.start;
+                    originalEndTime = cue.end;
+                    
+                    // 改变鼠标样式
+                    canvas.style.cursor = 'ew-resize';
+                    e.preventDefault();
+                } else {
+                    // 点击空白区域，定位播放线
+                    const ms = screenToTime(x);
+                    videoEl.currentTime = ms / 1000;
+                    
+                    // 如果按住鼠标，则开始平移拖拽
+                    if (e.button === 0) { // 左键
+                        isDragging = true;
+                        dragType = 'pan';
+                        dragStartX = x;
+                        originalPanOffset = panOffset;
+                        
+                        // 改变鼠标样式
+                        canvas.style.cursor = 'grabbing';
+                        e.preventDefault();
+                    }
+                }
+            });
+
+            // 鼠标移动事件
+            canvas.addEventListener('mousemove', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                if (isDragging) {
+                    if (dragType === 'pan') {
+                        // 平移拖拽
+                        const deltaX = x - dragStartX;
+                        const visibleDuration = videoMs / zoomLevel;
+                        const deltaTime = (deltaX / (canvas.width - 16)) * visibleDuration; // 16 = 2*pad
+                        const newPanOffset = originalPanOffset - deltaTime;
+                        
+                        // 限制平移范围
+                        const maxPanOffset = Math.max(0, videoMs - videoMs / zoomLevel);
+                        panOffset = Math.max(0, Math.min(maxPanOffset, newPanOffset));
+                        
+                        showDragHint(e.clientX, e.clientY, `平移: ${fmtMs(panOffset)} - ${fmtMs(panOffset + visibleDuration)}`);
+                        drawTimeline(videoEl.currentTime * 1000);
+                    } else if (dragCueIndex >= 0) {
+                        // 字幕拖拽
+                        const currentTime = screenToTime(x);
+                        let newStart = originalStartTime;
+                        let newEnd = originalEndTime;
+                        
+                        if (dragType === 'start') {
+                            newStart = Math.max(0, Math.min(originalEndTime - 100, currentTime));
+                            showDragHint(e.clientX, e.clientY, `开始时间: ${fmtMs(newStart)}`);
+                        } else if (dragType === 'end') {
+                            newEnd = Math.min(videoMs, Math.max(originalStartTime + 100, currentTime));
+                            showDragHint(e.clientX, e.clientY, `结束时间: ${fmtMs(newEnd)}`);
+                        } else if (dragType === 'move') {
+                            const duration = originalEndTime - originalStartTime;
+                            const deltaTime = currentTime - screenToTime(dragStartX);
+                            newStart = Math.max(0, Math.min(videoMs - duration, originalStartTime + deltaTime));
+                            newEnd = newStart + duration;
+                            showDragHint(e.clientX, e.clientY, `移动: ${fmtMs(newStart)} - ${fmtMs(newEnd)}`);
+                        }
+                        
+                        updateCueTime(dragCueIndex, newStart, newEnd);
+                    }
+                } else {
+                    // 更新鼠标样式
+                    const hit = getCueAtPosition(x, y);
+                    if (hit) {
+                        canvas.style.cursor = 'ew-resize';
+                        // 显示悬停提示
+                        const cue = cues[hit.index];
+                        let hintText = '';
+                        if (hit.type === 'start') {
+                            hintText = `拖拽调整开始时间: ${fmtMs(cue.start)}`;
+                        } else if (hit.type === 'end') {
+                            hintText = `拖拽调整结束时间: ${fmtMs(cue.end)}`;
+                        } else if (hit.type === 'move') {
+                            hintText = `拖拽移动字幕块: ${fmtMs(cue.start)} - ${fmtMs(cue.end)}`;
+                        }
+                        showDragHint(e.clientX, e.clientY, hintText);
+                    } else {
+                        canvas.style.cursor = 'grab';
+                        hideDragHint();
+                    }
+                }
+            });
+
+            // 鼠标释放事件
+            canvas.addEventListener('mouseup', (e) => {
+                if (isDragging) {
+                    // 如果正在拖拽字幕，立即触发保存
+                    if (dragCueIndex >= 0) {
+                        triggerAutoSave(true); // 立即保存
+                    }
+                    
+                    isDragging = false;
+                    dragType = null;
+                    dragCueIndex = -1;
+                    canvas.style.cursor = 'grab';
+                    hideDragHint();
+                }
+            });
+
+            // 鼠标离开事件
+            canvas.addEventListener('mouseleave', (e) => {
+                if (isDragging) {
+                    // 如果正在拖拽字幕，立即触发保存
+                    if (dragCueIndex >= 0) {
+                        triggerAutoSave(true); // 立即保存
+                    }
+                    
+                    isDragging = false;
+                    dragType = null;
+                    dragCueIndex = -1;
+                    canvas.style.cursor = 'grab';
+                }
+                hideDragHint();
+            });
+
+            // 滚轮缩放事件
+            canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const mouseTime = screenToTime(x);
+                
+                const zoomFactor = e.deltaY > 0 ? 0.8 : 1.25;
+                const newZoomLevel = Math.max(0.1, Math.min(10, zoomLevel * zoomFactor));
+                
+                // 以鼠标位置为中心进行缩放
+                const zoomRatio = newZoomLevel / zoomLevel;
+                const newPanOffset = mouseTime - (mouseTime - panOffset) * zoomRatio;
+                
+                zoomLevel = newZoomLevel;
+                panOffset = Math.max(0, Math.min(videoMs - videoMs / zoomLevel, newPanOffset));
+                
+                drawTimeline(videoEl.currentTime * 1000);
+            });
+
+            // 键盘快捷键
+            document.addEventListener('keydown', (e) => {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                
+                switch(e.key) {
+                    case 'r':
+                    case 'R':
+                        // 重置缩放和平移
+                        zoomLevel = 1;
+                        panOffset = 0;
+                        drawTimeline(videoEl.currentTime * 1000);
+                        break;
+                    case 'f':
+                    case 'F':
+                        // 适应窗口大小
+                        zoomLevel = 1;
+                        panOffset = 0;
+                        drawTimeline(videoEl.currentTime * 1000);
+                        break;
+                    case 'ArrowLeft':
+                        // 向左平移
+                        const leftStep = videoMs / zoomLevel / 10;
+                        panOffset = Math.max(0, panOffset - leftStep);
+                        drawTimeline(videoEl.currentTime * 1000);
+                        break;
+                    case 'ArrowRight':
+                        // 向右平移
+                        const rightStep = videoMs / zoomLevel / 10;
+                        panOffset = Math.min(videoMs - videoMs / zoomLevel, panOffset + rightStep);
+                        drawTimeline(videoEl.currentTime * 1000);
+                        break;
+                }
+            });
+
+            // 缩放控制按钮事件
+            zoomInBtn.addEventListener('click', () => {
+                const newZoomLevel = Math.min(10, zoomLevel * 1.25);
+                zoomLevel = newZoomLevel;
+                drawTimeline(videoEl.currentTime * 1000);
+            });
+
+            zoomOutBtn.addEventListener('click', () => {
+                const newZoomLevel = Math.max(0.1, zoomLevel * 0.8);
+                zoomLevel = newZoomLevel;
+                drawTimeline(videoEl.currentTime * 1000);
+            });
+
+            zoomResetBtn.addEventListener('click', () => {
+                zoomLevel = 1;
+                panOffset = 0;
+                drawTimeline(videoEl.currentTime * 1000);
+            });
+
+            // 保存按钮点击事件
+            saveTimelineBtn.addEventListener('click', async () => {
+                // 禁用按钮防止重复点击
+                saveTimelineBtn.disabled = true;
+                saveTimelineBtn.textContent = '保存中...';
+                saveTimelineBtn.style.background = '#6c757d';
+                
+                try {
+                    const success = await saveSubtitles(true);
+                    if (success) {
+                        // 保存成功，短暂显示成功状态
+                        saveTimelineBtn.textContent = '已保存';
+                        saveTimelineBtn.style.background = '#28a745';
+                        setTimeout(() => {
+                            saveTimelineBtn.textContent = '保存';
+                            saveTimelineBtn.style.background = '#28a745';
+                            saveTimelineBtn.disabled = false;
+                        }, 2000);
+                    } else {
+                        // 保存失败
+                        saveTimelineBtn.textContent = '保存失败';
+                        saveTimelineBtn.style.background = '#dc3545';
+                        setTimeout(() => {
+                            saveTimelineBtn.textContent = '保存';
+                            saveTimelineBtn.style.background = '#28a745';
+                            saveTimelineBtn.disabled = false;
+                        }, 3000);
+                    }
+                } catch (e) {
+                    console.error('保存失败:', e);
+                    saveTimelineBtn.textContent = '保存失败';
+                    saveTimelineBtn.style.background = '#dc3545';
+                    setTimeout(() => {
+                        saveTimelineBtn.textContent = '保存';
+                        saveTimelineBtn.style.background = '#28a745';
+                        saveTimelineBtn.disabled = false;
+                    }, 3000);
+                }
             });
 
             window.addEventListener('resize', () => drawTimeline(videoEl.currentTime*1000));
@@ -516,6 +1229,7 @@ if __name__ == '__main__':
 
             async function onSaveSrt() {
                 try {
+                    updateSaveStatus('保存中...', '#ffc107');
                     const payload = { subtitles: cues.map(c => ({
                         start: Number(c.start)||0,
                         end: Number(c.end)||0,
@@ -529,12 +1243,15 @@ if __name__ == '__main__':
                     });
                     const data = await res.json();
                     if (data && data.code === 0 && data.download_url) {
+                        updateSaveStatus('已保存', '#28a745');
                         window.location.href = data.download_url;
                     } else {
+                        updateSaveStatus('保存失败', '#dc3545');
                         alert(data && data.msg ? data.msg : '保存失败');
                     }
                 } catch (e) {
                     console.error(e);
+                    updateSaveStatus('保存失败', '#dc3545');
                     alert('保存失败');
                 }
             }
@@ -1202,11 +1919,20 @@ if __name__ == '__main__':
         video_path = None
         from videotrans.configure import config as _cfg
         exts = set([e.lower() for e in _cfg.VIDEO_EXTS + _cfg.AUDIO_EXITS])
+        
+        # 优先选择非edited_开头的SRT文件
+        srt_files = [f for f in files if f.name.lower().endswith('.srt')]
+        for f in srt_files:
+            if not f.name.startswith('edited_'):
+                srt_path = f
+                break
+        # 如果没有找到非edited文件，选择第一个SRT文件
+        if not srt_path and srt_files:
+            srt_path = srt_files[0]
+            
         for f in files:
             lower = f.name.lower()
-            if lower.endswith('.srt'):
-                srt_path = f
-            elif any(lower.endswith('.' + e) for e in exts):
+            if any(lower.endswith('.' + e) for e in exts):
                 if video_path is None:
                     video_path = f
         if not srt_path or not video_path:
@@ -1290,11 +2016,31 @@ if __name__ == '__main__':
         except Exception as e:
             return jsonify({"code": 2, "msg": f"生成SRT失败: {str(e)}"}), 500
 
-        out_name = f'edited_{int(time.time())}.srt'
-        out_path = (task_dir / out_name).as_posix()
-        Path(out_path).write_text(srt_str, encoding='utf-8')
+        # 找到原来的SRT文件并覆盖它
+        files = [f for f in task_dir.iterdir() if f.is_file()]
+        srt_path = None
+        srt_files = [f for f in files if f.name.lower().endswith('.srt')]
+        
+        # 优先选择非edited_开头的SRT文件
+        for f in srt_files:
+            if not f.name.startswith('edited_'):
+                srt_path = f
+                break
+        # 如果没有找到非edited文件，选择第一个SRT文件
+        if not srt_path and srt_files:
+            srt_path = srt_files[0]
+        
+        if srt_path:
+            # 覆盖原来的SRT文件
+            srt_path.write_text(srt_str, encoding='utf-8')
+            download_url = f'/{API_RESOURCE}/{task_id}/{srt_path.name}'
+        else:
+            # 如果没有找到原文件，创建新文件
+            out_name = f'edited_{int(time.time())}.srt'
+            out_path = (task_dir / out_name).as_posix()
+            Path(out_path).write_text(srt_str, encoding='utf-8')
+            download_url = f'/{API_RESOURCE}/{task_id}/{out_name}'
 
-        download_url = f'/{API_RESOURCE}/{task_id}/{out_name}'
         return jsonify({"code": 0, "msg": "ok", "download_url": download_url})
 
     @app.route('/viewer_api/<task_id>/export_json', methods=['POST'])
