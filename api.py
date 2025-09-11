@@ -504,8 +504,7 @@ if __name__ == '__main__':
                     <button id=\"btnTranslateSubtitle\" style=\"padding:6px 12px; border:1px solid #9c27b0; background:#9c27b0; color:#fff; border-radius:6px; cursor:pointer;\">1.翻译字幕</button>
                     <button id=\"btnSaveTranslation\" style=\"padding:6px 12px; border:1px solid #17a2b8; background:#17a2b8; color:#fff; border-radius:6px; cursor:pointer; display:none;\">保存翻译</button>
                     <button id=\"btnVoiceClone\" style=\"padding:6px 12px; border:1px solid #e91e63; background:#e91e63; color:#fff; border-radius:6px; cursor:pointer;\">语音克隆</button>
-                    <button id=\"btnGenerateAudio\" style=\"padding:6px 12px; border:1px solid #ff9800; background:#ff9800; color:#fff; border-radius:6px; cursor:pointer; display:none;\">生成音频</button>
-                    <button id=\"btnSynthesizeAudio\" style=\"padding:6px 12px; border:1px solid #4caf50; background:#4caf50; color:#fff; border-radius:6px; cursor:pointer; display:none;\">合成音频</button>
+                    
                     <button id=\"btnSynthesizeVideo\" style=\"padding:6px 12px; border:1px solid #ff6b35; background:#ff6b35; color:#fff; border-radius:6px; cursor:pointer;\">合成视频</button>
                     <button id=\"btnAddSubtitles\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">添加字幕</button>
                     <button id=\"btnSaveSrt\" style=\"padding:6px 12px; border:1px solid #ddd; background:#fff; border-radius:6px; cursor:pointer;\">下载SRT(含spk)</button>
@@ -558,9 +557,7 @@ if __name__ == '__main__':
             const btnGenerateAudio = document.getElementById('btnGenerateAudio');
             const btnSynthesizeAudio = document.getElementById('btnSynthesizeAudio');
             const btnSynthesizeVideo = document.getElementById('btnSynthesizeVideo');
-            const btnSaveSrt = document.getElementById('btnSaveSrt');
             const btnAddSubtitles = document.getElementById('btnAddSubtitles');
-            const btnSaveJson = document.getElementById('btnSaveJson');
             const dragHint = document.getElementById('dragHint');
             const zoomLevelEl = document.getElementById('zoomLevel');
             const visibleRangeEl = document.getElementById('visibleRange');
@@ -1611,7 +1608,49 @@ if __name__ == '__main__':
                     // 显示进度提示 + 弹窗
                     btnSynthesizeVideo.textContent = '合成中...';
                     btnSynthesizeVideo.disabled = true;
-                    showSynthModal('正在启动任务...');
+                    showSynthModal('准备生成配音音频...');
+
+                    // 先生成音频（合并原“生成音频”步骤）
+                    // 检查翻译
+                    const hasTranslation = cues.some(c => (c.translated_text && c.translated_text.trim()) || (c.translation && c.translation.trim()));
+                    if (!hasTranslation) {
+                        hideSynthModal();
+                        alert('请先翻译字幕');
+                        return;
+                    }
+                    // 检查语音克隆映射
+                    const hasVoiceMapping = await checkVoiceMapping();
+                    if (!hasVoiceMapping) {
+                        hideSynthModal();
+                        alert('没有找到语音克隆映射，请先进行语音克隆');
+                        return;
+                    }
+
+                    const genPayload = {
+                        subtitles: cues.map((c, index) => ({
+                            line: index + 1,
+                            start_time: Number(c.start) || 0,
+                            end_time: Number(c.end) || 0,
+                            startraw: c.startraw || '',
+                            endraw: c.endraw || '',
+                            time: `${c.startraw || ''} --> ${c.endraw || ''}`,
+                            text: String(c.text || '').trim(),
+                            translated_text: String((c.translated_text || c.translation || '')).trim(),
+                            speaker: String(c.speaker || '').trim(),
+                        }))
+                    };
+                    console.log('发送生成音频请求数据(合成视频前置):', genPayload);
+                    synthModalMsg.textContent = '正在生成配音音频...';
+                    const genRes = await fetch(`/viewer_api/${taskId}/generate_audio`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(genPayload)
+                    });
+                    const genData = await genRes.json();
+                    if (!(genData && genData.code === 0)) {
+                        hideSynthModal();
+                        alert(genData && genData.msg ? ('生成音频失败: ' + genData.msg) : '生成音频失败');
+                        return;
+                    }
+                    synthModalMsg.textContent = '配音音频生成完成，开始合成视频...';
                     
                     // 准备视频合成请求数据
                     const payload = { 
@@ -1628,7 +1667,7 @@ if __name__ == '__main__':
                     };
                     
                     console.log('发送视频合成请求数据:', payload);
-                    
+                    synthModalMsg.textContent = '正在启动视频合成...';
                     const res = await fetch(`/viewer_api/${taskId}/synthesize_video`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -1832,14 +1871,14 @@ if __name__ == '__main__':
                                     renderList();
                                     // 检查是否有语音克隆映射，如果有则显示生成音频按钮
                                     checkVoiceMapping().then(hasMapping => {
-                                        if (hasMapping) {
+                                        if (hasMapping && btnGenerateAudio) {
                                             btnGenerateAudio.style.display = 'inline-block';
                                         }
                                     });
                                     
                                     // 检查是否有已生成的音频文件，如果有则显示合成音频按钮
                                     checkGeneratedAudio().then(hasAudio => {
-                                        if (hasAudio) {
+                                        if (hasAudio && btnSynthesizeAudio) {
                                             btnSynthesizeAudio.style.display = 'inline-block';
                                         }
                                     });
@@ -2145,12 +2184,8 @@ if __name__ == '__main__':
             btnTranslateSubtitle.addEventListener('click', onTranslateSubtitle);
             btnSaveTranslation.addEventListener('click', onSaveTranslation);
             btnVoiceClone.addEventListener('click', onVoiceClone);
-            btnGenerateAudio.addEventListener('click', onGenerateAudio);
-            btnSynthesizeAudio.addEventListener('click', onSynthesizeAudio);
             btnSynthesizeVideo.addEventListener('click', onSynthesizeVideo);
             btnAddSubtitles.addEventListener('click', onAddSubtitles);
-            btnSaveSrt.addEventListener('click', onSaveSrt);
-            btnSaveJson.addEventListener('click', onSaveJson);
             </script>
         </body>
         </html>
