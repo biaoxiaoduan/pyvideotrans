@@ -329,18 +329,22 @@ if __name__ == '__main__':
                     border: 1px solid #e5e5e5; 
                     border-radius: 8px; 
                     overflow: auto; 
-                    padding: 6px; 
+                    padding: 8px; 
                     background: #fafafa;
                     max-height: 70vh;
+                    width: 100%;
+                    box-sizing: border-box;
                 }}
                 .item {{ 
-                    padding: 6px 8px; 
+                    padding: 8px 10px; 
                     border-radius: 6px; 
                     cursor: pointer; 
-                    margin-bottom: 4px; 
+                    margin-bottom: 6px; 
                     border: 1px solid transparent;
                     transition: all 0.2s ease;
                     background: white;
+                    width: 100%;
+                    box-sizing: border-box;
                 }}
                 .item:hover {{ 
                     background: #f0f8ff; 
@@ -361,25 +365,26 @@ if __name__ == '__main__':
                     font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
                 }}
                 .speakerSel {{ 
-                    margin-right: 8px; 
-                    padding: 2px 6px; 
+                    padding: 4px 8px; 
                     font-size: 11px; 
                     border: 1px solid #ddd;
                     border-radius: 4px;
                     background: white;
-                    min-width: 60px;
+                    min-width: 80px;
+                    flex-shrink: 0;
                 }}
                 .textEdit {{ 
                     width: 100%; 
                     box-sizing: border-box; 
                     resize: vertical; 
-                    min-height: 32px; 
+                    min-height: 40px; 
                     font-size: 13px; 
-                    line-height: 1.3; 
-                    padding: 4px 6px; 
+                    line-height: 1.4; 
+                    padding: 6px 8px; 
                     border: 1px solid #ddd; 
                     border-radius: 4px;
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    margin: 0;
                 }}
                 .textEdit:focus {{
                     outline: none;
@@ -440,7 +445,7 @@ if __name__ == '__main__':
                 <h3 style=\"margin:0;\">字幕查看器</h3>
                 <div class=\"task\">任务: {task_id}</div>
                 <div style=\"margin-left:auto; display:flex; gap:8px; align-items:center;\">
-                    <button id=\"btnTranslateSubtitle\" style=\"padding:6px 12px; border:1px solid #9c27b0; background:#9c27b0; color:#fff; border-radius:6px; cursor:pointer;\">翻译字幕</button>
+                    <button id=\"btnTranslateSubtitle\" style=\"padding:6px 12px; border:1px solid #9c27b0; background:#9c27b0; color:#fff; border-radius:6px; cursor:pointer;\">1.翻译字幕</button>
                     <button id=\"btnSaveTranslation\" style=\"padding:6px 12px; border:1px solid #17a2b8; background:#17a2b8; color:#fff; border-radius:6px; cursor:pointer; display:none;\">保存翻译</button>
                     <button id=\"btnVoiceClone\" style=\"padding:6px 12px; border:1px solid #e91e63; background:#e91e63; color:#fff; border-radius:6px; cursor:pointer;\">语音克隆</button>
                     <button id=\"btnGenerateAudio\" style=\"padding:6px 12px; border:1px solid #ff9800; background:#ff9800; color:#fff; border-radius:6px; cursor:pointer; display:none;\">生成音频</button>
@@ -571,9 +576,14 @@ if __name__ == '__main__':
                     t.className = 'time';
                     t.textContent = `${c.startraw} → ${c.endraw}`;
                     const tx = document.createElement('div');
-                    tx.style.display = 'flex';
-                    tx.style.gap = '6px';
-                    tx.style.alignItems = 'flex-start';
+                    tx.style.width = '100%';
+                    
+                    // 说话人选择器行
+                    const speakerRow = document.createElement('div');
+                    speakerRow.style.display = 'flex';
+                    speakerRow.style.alignItems = 'center';
+                    speakerRow.style.marginBottom = '6px';
+                    speakerRow.style.gap = '8px';
                     
                     const sel = document.createElement('select');
                     sel.className = 'speakerSel';
@@ -590,61 +600,57 @@ if __name__ == '__main__':
                         triggerAutoSave(); // 说话人修改时也触发自动保存
                     });
                     
-                    const contentWrapper = document.createElement('div');
-                    contentWrapper.style.flex = '1';
-                    contentWrapper.style.minWidth = '0';
+                    speakerRow.appendChild(sel);
+                    tx.appendChild(speakerRow);
+                    
+                    // 原语言文本框
+                    const originalWrapper = document.createElement('div');
+                    originalWrapper.style.marginBottom = '6px';
+                    
+                    const originalLabel = document.createElement('div');
+                    originalLabel.style.fontSize = '11px';
+                    originalLabel.style.fontWeight = '600';
+                    originalLabel.style.color = '#495057';
+                    originalLabel.style.marginBottom = '4px';
+                    originalLabel.innerHTML = '📝 原语言:';
                     
                     const content = document.createElement('textarea');
                     content.className = 'textEdit';
                     content.value = c.text || '';
+                    content.placeholder = '原语言文本...';
+                    content.style.width = '100%';
                     content.addEventListener('input', () => { 
                         c.text = content.value; 
                         triggerAutoSave(); // 文本修改时也触发自动保存
                     });
                     
-                    contentWrapper.appendChild(content);
-                    tx.appendChild(sel); 
-                    tx.appendChild(contentWrapper);
+                    originalWrapper.appendChild(originalLabel);
+                    originalWrapper.appendChild(content);
+                    tx.appendChild(originalWrapper);
                     
-                    // 如果有翻译后的字幕，显示在下面并支持编辑
-                    if (c.translated_text) {
-                        const translatedDiv = document.createElement('div');
-                        translatedDiv.style.marginTop = '6px';
-                        translatedDiv.style.padding = '6px 8px';
-                        translatedDiv.style.backgroundColor = '#f8f9fa';
-                        translatedDiv.style.border = '1px solid #e9ecef';
-                        translatedDiv.style.borderRadius = '4px';
-                        translatedDiv.style.fontSize = '12px';
-                        
-                        // 创建翻译标签
-                        const translatedLabel = document.createElement('div');
-                        translatedLabel.style.marginBottom = '4px';
-                        translatedLabel.style.fontSize = '11px';
-                        translatedLabel.style.fontWeight = '600';
-                        translatedLabel.style.color = '#6c757d';
-                        translatedLabel.innerHTML = '🌐 翻译:';
-                        
-                        // 创建可编辑的翻译文本框
-                        const translatedInput = document.createElement('textarea');
-                        translatedInput.value = c.translated_text;
-                        translatedInput.style.width = '100%';
-                        translatedInput.style.minHeight = '32px';
-                        translatedInput.style.padding = '4px 6px';
-                        translatedInput.style.border = '1px solid #dee2e6';
-                        translatedInput.style.borderRadius = '3px';
-                        translatedInput.style.fontSize = '12px';
-                        translatedInput.style.resize = 'vertical';
-                        translatedInput.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-                        translatedInput.style.lineHeight = '1.3';
-                        translatedInput.addEventListener('input', () => { 
-                            c.translated_text = translatedInput.value; 
-                            triggerAutoSave(); // 翻译文本修改时也触发自动保存
-                        });
-                        
-                        translatedDiv.appendChild(translatedLabel);
-                        translatedDiv.appendChild(translatedInput);
-                        tx.appendChild(translatedDiv);
-                    }
+                    // 翻译语言文本框
+                    const translatedWrapper = document.createElement('div');
+                    
+                    const translatedLabel = document.createElement('div');
+                    translatedLabel.style.fontSize = '11px';
+                    translatedLabel.style.fontWeight = '600';
+                    translatedLabel.style.color = '#6c757d';
+                    translatedLabel.style.marginBottom = '4px';
+                    translatedLabel.innerHTML = '🌐 翻译:';
+                    
+                    const translatedInput = document.createElement('textarea');
+                    translatedInput.className = 'textEdit';
+                    translatedInput.value = c.translated_text || '';
+                    translatedInput.placeholder = '翻译文本...';
+                    translatedInput.style.width = '100%';
+                    translatedInput.addEventListener('input', () => { 
+                        c.translated_text = translatedInput.value; 
+                        saveTranslationText(); // 翻译文本修改时自动保存
+                    });
+                    
+                    translatedWrapper.appendChild(translatedLabel);
+                    translatedWrapper.appendChild(translatedInput);
+                    tx.appendChild(translatedWrapper);
                     
                     item.appendChild(t); item.appendChild(tx);
                     item.addEventListener('click', () => {
@@ -915,6 +921,44 @@ if __name__ == '__main__':
             // 自动保存字幕到SRT文件
             async function autoSaveSubtitles() {
                 return await saveSubtitles(true);
+            }
+
+            // 保存翻译文本
+            let translationSaveTimeout = null;
+            async function saveTranslationText() {
+                if (translationSaveTimeout) {
+                    clearTimeout(translationSaveTimeout);
+                }
+                
+                translationSaveTimeout = setTimeout(async () => {
+                    try {
+                        const payload = { 
+                            subtitles: cues.map(c => ({
+                                start: Number(c.start)||0,
+                                end: Number(c.end)||0,
+                                text: String(c.text||'').trim(),
+                                speaker: String(c.speaker||'').trim(),
+                                translated_text: String(c.translated_text||'').trim(),
+                            })), 
+                            target_language: 'en' // 默认英语，可以根据需要调整
+                        };
+                        
+                        const res = await fetch(`/viewer_api/${taskId}/save_translation`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        
+                        const data = await res.json();
+                        if (data && data.code === 0) {
+                            console.log('翻译文本已保存');
+                        } else {
+                            console.error('保存翻译文本失败:', data && data.msg ? data.msg : '未知错误');
+                        }
+                    } catch (e) {
+                        console.error('保存翻译文本失败:', e);
+                    }
+                }, 1000); // 1秒后自动保存
             }
 
             // 触发自动保存（防抖）
@@ -1571,8 +1615,6 @@ if __name__ == '__main__':
                                     });
                                     // 重新渲染列表
                                     renderList();
-                                    // 显示保存翻译按钮
-                                    btnSaveTranslation.style.display = 'inline-block';
                                     // 检查是否有语音克隆映射，如果有则显示生成音频按钮
                                     checkVoiceMapping().then(hasMapping => {
                                         if (hasMapping) {
@@ -1586,7 +1628,7 @@ if __name__ == '__main__':
                                             btnSynthesizeAudio.style.display = 'inline-block';
                                         }
                                     });
-                                    alert('翻译完成！您可以编辑翻译结果，然后点击"保存翻译"按钮保存。');
+                                    alert(`翻译完成！已生成翻译文件：${data.srt_file}。您可以编辑翻译结果，修改会自动保存。`);
                                 } else {
                                     alert('翻译失败：没有返回翻译结果');
                                 }
@@ -2332,10 +2374,33 @@ if __name__ == '__main__':
                         translated_subtitle['text'] = subtitle['text']
                     translated_subtitles.append(translated_subtitle)
                 
+                # 生成带语言后缀的SRT文件
+                from videotrans.util import help_srt
+                import time
+                
+                # 创建翻译后的SRT内容
+                srt_list = []
+                for i, subtitle in enumerate(translated_subtitles):
+                    srt_list.append({
+                        'line': i + 1,
+                        'start_time': subtitle.get('start', 0),
+                        'end_time': subtitle.get('end', 0),
+                        'text': subtitle.get('text', ''),
+                    })
+                
+                srt_str = help_srt.get_srt_from_list(srt_list)
+                
+                # 生成带语言后缀的文件名
+                language_suffix = target_language.lower()
+                srt_filename = f'translated_{language_suffix}.srt'
+                srt_path = task_dir / srt_filename
+                srt_path.write_text(srt_str, encoding='utf-8')
+                
                 return jsonify({
                     "code": 0,
                     "msg": "翻译完成",
-                    "translated_subtitles": translated_subtitles
+                    "translated_subtitles": translated_subtitles,
+                    "srt_file": srt_filename
                 })
                 
             finally:
@@ -2353,41 +2418,46 @@ if __name__ == '__main__':
     def viewer_save_translation(task_id):
         """保存翻译结果接口"""
         data = request.json
-        if not data or 'subtitles' not in data:
-            return jsonify({"code": 1, "msg": "缺少字幕数据"}), 400
+        if not data or 'subtitles' not in data or 'target_language' not in data:
+            return jsonify({"code": 1, "msg": "缺少字幕数据或目标语言"}), 400
 
         task_dir = Path(TARGET_DIR) / task_id
         if not task_dir.exists():
             return jsonify({"code": 1, "msg": "任务不存在"}), 404
 
         try:
+            from videotrans.util import help_srt
+            
             subtitles = data['subtitles']
+            target_language = data['target_language']
             
-            # 创建翻译后的SRT文件
-            srt_content = ""
-            for subtitle in subtitles:
-                line_num = subtitle.get('line', 0)
-                start_time = subtitle.get('startraw', '')
-                end_time = subtitle.get('endraw', '')
-                original_text = subtitle.get('text', '').strip()
-                translated_text = subtitle.get('translated_text', '').strip()
-                speaker = subtitle.get('speaker', '').strip()
-                
-                # 如果有翻译内容，使用翻译内容；否则使用原文
-                display_text = translated_text if translated_text else original_text
-                
-                # 如果有说话人信息，添加到文本中
-                if speaker:
-                    display_text = f"[{speaker}] {display_text}"
-                
-                srt_content += f"{line_num}\n"
-                srt_content += f"{start_time} --> {end_time}\n"
-                srt_content += f"{display_text}\n\n"
+            # 创建翻译后的SRT内容
+            srt_list = []
+            for i, subtitle in enumerate(subtitles):
+                srt_list.append({
+                    'line': i + 1,
+                    'start_time': subtitle.get('start', 0),
+                    'end_time': subtitle.get('end', 0),
+                    'text': subtitle.get('translated_text', ''),
+                })
             
-            # 保存翻译后的SRT文件
-            translated_srt_path = task_dir / f"{task_id}_translated.srt"
-            with open(translated_srt_path, 'w', encoding='utf-8') as f:
-                f.write(srt_content)
+            srt_str = help_srt.get_srt_from_list(srt_list)
+            
+            # 生成带语言后缀的文件名
+            language_suffix = target_language.lower()
+            srt_filename = f'translated_{language_suffix}.srt'
+            srt_path = task_dir / srt_filename
+            srt_path.write_text(srt_str, encoding='utf-8')
+            
+            return jsonify({
+                "code": 0,
+                "msg": "翻译保存成功",
+                "srt_file": srt_filename
+            })
+            
+        except Exception as e:
+            print(f"保存翻译失败: {str(e)}")
+            return jsonify({"code": 1, "msg": f"保存翻译失败: {str(e)}"}), 500
             
             # 同时保存JSON格式的翻译结果
             translation_data = {
