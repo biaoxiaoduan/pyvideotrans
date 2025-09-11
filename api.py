@@ -189,6 +189,32 @@ if __name__ == '__main__':
         trk = SpeechToText(cfg=cfg)
         config.prepare_queue.append(trk)
         tools.set_process(text=f"Currently in queue No.{len(config.prepare_queue)}", uuid=obj['uuid'])
+        
+        # 在语音识别完成后，将SRT文件重命名为raw.srt
+        def rename_srt_to_raw(task_id):
+            import time
+            max_wait = 300  # 最多等待5分钟
+            wait_time = 0
+            while wait_time < max_wait:
+                task_dir = Path(TARGET_DIR) / task_id
+                if task_dir.exists():
+                    # 查找生成的SRT文件
+                    srt_files = list(task_dir.glob("*.srt"))
+                    if srt_files:
+                        # 将第一个SRT文件重命名为raw.srt
+                        srt_file = srt_files[0]
+                        raw_srt_path = task_dir / "raw.srt"
+                        if srt_file != raw_srt_path:
+                            srt_file.rename(raw_srt_path)
+                            print(f"SRT文件已重命名为: raw.srt")
+                        break
+                time.sleep(2)
+                wait_time += 2
+        
+        # 启动后台任务重命名SRT文件
+        import threading
+        threading.Thread(target=rename_srt_to_raw, args=(obj['uuid'],), daemon=True).start()
+        
         # 跳转到结果页（完成后再跳转到 /view/<task_id> 进行编辑）
         return redirect(url_for('funasr_result', task_id=obj['uuid']))
 
@@ -640,7 +666,15 @@ if __name__ == '__main__':
                     
                     const translatedInput = document.createElement('textarea');
                     translatedInput.className = 'textEdit';
-                    translatedInput.value = c.translated_text || '';
+                    // 优先显示已加载的翻译文本，按优先级顺序
+                    translatedInput.value = c.translated_text || 
+                                          c.translated_text_en || 
+                                          c.translated_text_es || 
+                                          c.translated_text_fr || 
+                                          c.translated_text_ja || 
+                                          c.translated_text_zh || 
+                                          c.translated_text_pt || 
+                                          c.translated_text_th || '';
                     translatedInput.placeholder = '翻译文本...';
                     translatedInput.style.width = '100%';
                     translatedInput.addEventListener('input', () => { 
@@ -1266,8 +1300,31 @@ if __name__ == '__main__':
                     cues = data.subtitles || [];
                     videoMs = data.video_ms || (cues.length? cues[cues.length-1].end : 0);
                     speakers = (data.speakers || []).filter(Boolean);
+                    const translationFiles = data.translation_files || [];
+                    
                     renderList();
                     drawTimeline(0);
+                    
+                    // 如果有翻译文件，显示提示
+                    if (translationFiles.length > 0) {
+                        console.log(`检测到翻译文件: ${translationFiles.join(', ')}`);
+                        // 在页面上显示一个通知
+                        const notification = document.createElement('div');
+                        notification.style.cssText = `
+                            position: fixed; top: 20px; right: 20px; z-index: 1000;
+                            background: #28a745; color: white; padding: 10px 15px;
+                            border-radius: 5px; font-size: 14px; box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+                        `;
+                        notification.innerHTML = `✅ 已加载翻译文件: ${translationFiles.join(', ')}`;
+                        document.body.appendChild(notification);
+                        
+                        // 3秒后自动隐藏
+                        setTimeout(() => {
+                            if (notification.parentNode) {
+                                notification.parentNode.removeChild(notification);
+                            }
+                        }, 3000);
+                    }
                 }
             });
 
@@ -1962,15 +2019,22 @@ if __name__ == '__main__':
         from videotrans.configure import config as _cfg
         exts = set([e.lower() for e in _cfg.VIDEO_EXTS + _cfg.AUDIO_EXITS])
         
-        # 优先选择非edited_开头的SRT文件
+        # 优先选择raw.srt文件
         srt_files = [f for f in files if f.name.lower().endswith('.srt')]
-        for f in srt_files:
-            if not f.name.startswith('edited_'):
-                srt_path = f
-                break
-        # 如果没有找到非edited文件，选择第一个SRT文件
-        if not srt_path and srt_files:
-            srt_path = srt_files[0]
+        print(f"找到的SRT文件: {[f.name for f in srt_files]}")
+        
+        # 首先查找raw.srt文件
+        raw_srt_path = task_dir / "raw.srt"
+        if raw_srt_path.exists():
+            srt_path = raw_srt_path
+            print(f"选择SRT文件: raw.srt")
+        else:
+            # 如果没有raw.srt，选择第一个SRT文件
+            if srt_files:
+                srt_path = srt_files[0]
+                print(f"选择第一个SRT文件: {srt_path.name}")
+            else:
+                srt_path = None
             
         for f in files:
             lower = f.name.lower()
@@ -1980,8 +2044,11 @@ if __name__ == '__main__':
         if not srt_path or not video_path:
             return jsonify({"code": 1, "msg": "任务文件缺失（需要视频与srt）"}), 400
 
-        # 解析字幕
+        # 解析字幕（保持原有逻辑不变）
+        print(f"开始解析SRT文件: {srt_path}")
         subs = help_srt.get_subtitle_from_srt(srt_path.as_posix())
+        print(f"解析到 {len(subs)} 条字幕")
+        
         # 提取说话人并清理文本（按首行 [xxx] 解析）
         import re as _re
         parsed = []
@@ -2009,13 +2076,48 @@ if __name__ == '__main__':
                 'duration': (int(it.get('end_time', 0)) - int(it.get('start_time', 0))) if ('end_time' in it and 'start_time' in it) else 0,
             })
 
+        # 检测并加载翻译文件（不影响原有逻辑）
+        translation_files = {}
+        for f in files:
+            if f.name.startswith('translated_') and f.name.endswith('.srt'):
+                # 提取语言代码
+                lang_code = f.name.replace('translated_', '').replace('.srt', '')
+                try:
+                    # 解析翻译文件
+                    translated_srt = help_srt.get_subtitle_from_srt(f.as_posix())
+                    translation_files[lang_code] = translated_srt
+                    print(f"检测到翻译文件: {f.name}, 语言: {lang_code}")
+                except Exception as e:
+                    print(f"解析翻译文件 {f.name} 失败: {e}")
+
+        # 将翻译内容填充到字幕项中
+        for subtitle_item in parsed:
+            for lang_code, translated_srt in translation_files.items():
+                # 查找对应的翻译文本（通过时间匹配）
+                for trans_item in translated_srt:
+                    if (abs(trans_item.get('start_time', 0) - subtitle_item.get('start', 0)) < 100 and
+                        abs(trans_item.get('end_time', 0) - subtitle_item.get('end', 0)) < 100):
+                        subtitle_item[f'translated_text_{lang_code}'] = trans_item.get('text', '')
+                        break
+
         # 视频总时长（毫秒）
         try:
             video_ms = int(help_ffmpeg.get_video_duration(video_path.as_posix()) or 0)
         except Exception:
             video_ms = parsed[-1]['end'] if parsed else 0
 
-        return jsonify({"code": 0, "msg": "ok", "subtitles": parsed, "video_ms": video_ms, "speakers": sorted(list(spk_set))})
+        print(f"解析完成，共 {len(parsed)} 条字幕")
+        print(f"说话人: {sorted(list(spk_set))}")
+        print(f"翻译文件: {list(translation_files.keys())}")
+        
+        return jsonify({
+            "code": 0, 
+            "msg": "ok", 
+            "subtitles": parsed, 
+            "video_ms": video_ms, 
+            "speakers": sorted(list(spk_set)),
+            "translation_files": list(translation_files.keys())
+        })
 
     @app.route('/viewer_api/<task_id>/export_srt', methods=['POST'])
     def viewer_export_srt(task_id):
@@ -2058,30 +2160,11 @@ if __name__ == '__main__':
         except Exception as e:
             return jsonify({"code": 2, "msg": f"生成SRT失败: {str(e)}"}), 500
 
-        # 找到原来的SRT文件并覆盖它
-        files = [f for f in task_dir.iterdir() if f.is_file()]
-        srt_path = None
-        srt_files = [f for f in files if f.name.lower().endswith('.srt')]
-        
-        # 优先选择非edited_开头的SRT文件
-        for f in srt_files:
-            if not f.name.startswith('edited_'):
-                srt_path = f
-                break
-        # 如果没有找到非edited文件，选择第一个SRT文件
-        if not srt_path and srt_files:
-            srt_path = srt_files[0]
-        
-        if srt_path:
-            # 覆盖原来的SRT文件
-            srt_path.write_text(srt_str, encoding='utf-8')
-            download_url = f'/{API_RESOURCE}/{task_id}/{srt_path.name}'
-        else:
-            # 如果没有找到原文件，创建新文件
-            out_name = f'edited_{int(time.time())}.srt'
-            out_path = (task_dir / out_name).as_posix()
-            Path(out_path).write_text(srt_str, encoding='utf-8')
-            download_url = f'/{API_RESOURCE}/{task_id}/{out_name}'
+        # 保存到raw.srt文件
+        raw_srt_path = task_dir / "raw.srt"
+        raw_srt_path.write_text(srt_str, encoding='utf-8')
+        download_url = f'/{API_RESOURCE}/{task_id}/raw.srt'
+        print(f"字幕已保存到: raw.srt")
 
         return jsonify({"code": 0, "msg": "ok", "download_url": download_url})
 
@@ -2448,6 +2531,7 @@ if __name__ == '__main__':
             srt_filename = f'translated_{language_suffix}.srt'
             srt_path = task_dir / srt_filename
             srt_path.write_text(srt_str, encoding='utf-8')
+            print(f"翻译文件已保存到: {srt_filename}")
             
             return jsonify({
                 "code": 0,
@@ -2580,7 +2664,7 @@ if __name__ == '__main__':
             return jsonify({"code": 1, "msg": f"语音克隆失败: {str(e)}"}), 500
 
     def extract_speaker_audio(task_dir, speaker, speaker_segments):
-        """提取指定说话人的音频片段"""
+        """提取指定说话人的音频片段 - 新流程：先切分再Demucs"""
         try:
             from videotrans.util import tools
             
@@ -2597,64 +2681,35 @@ if __name__ == '__main__':
             video_path = video_files[0]
             print(f"使用视频文件: {video_path}")
             
-            # 首先提取原始音频
-            raw_audio_path = speaker_dir / f"{speaker}_raw_audio.wav"
-            if not raw_audio_path.exists():
-                print(f"正在提取原始音频: {raw_audio_path}")
-                tools.runffmpeg([
-                    '-y', '-i', str(video_path),
-                    '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
-                    str(raw_audio_path)
-                ])
-            
-            # 使用Demucs分离人声和背景音乐
-            vocals_path = speaker_dir / f"{speaker}_vocals.wav"
-            if not vocals_path.exists():
-                print(f"正在使用Demucs分离人声: {vocals_path}")
-                
-                # 使用Demucs分离人声
-                success = separate_voice_background_demucs(str(raw_audio_path), str(speaker_dir))
-                
-                if success:
-                    # Demucs生成的文件名是background.wav和vocal.wav
-                    demucs_vocal_path = speaker_dir / "vocal.wav"
-                    if demucs_vocal_path.exists():
-                        # 复制到我们期望的文件名
-                        import shutil
-                        shutil.copy2(demucs_vocal_path, vocals_path)
-                        print(f"Demucs人声分离成功: {vocals_path}")
-                    else:
-                        print("Demucs人声文件不存在，使用原始音频")
-                        import shutil
-                        shutil.copy2(raw_audio_path, vocals_path)
-                else:
-                    print("Demucs分离失败，使用原始音频")
-                    import shutil
-                    shutil.copy2(raw_audio_path, vocals_path)
-            
-            # 根据字幕时间戳切分说话人的音频片段
-            speaker_audio_path = speaker_dir / f"{speaker}_segments.wav"
+            # 第一步：根据SRT时间和说话人切分音频，生成 _spk[i] 文件
+            speaker_audio_path = speaker_dir / f"spk{speaker.replace('spk', '')}.wav"
             if not speaker_audio_path.exists():
                 print(f"正在切分说话人 '{speaker}' 的音频片段...")
+                print(f"说话人片段数量: {len(speaker_segments)}")
+                if speaker_segments:
+                    print(f"第一个片段示例: {speaker_segments[0]}")
                 
                 # 合并该说话人的所有音频片段
                 segment_files = []
                 for i, segment in enumerate(speaker_segments):
-                    start_time = segment.get('start_time', 0) / 1000  # 转换为秒
-                    end_time = segment.get('end_time', 0) / 1000
+                    # 支持多种字段名格式
+                    start_time = (segment.get('start_time', segment.get('start', 0))) / 1000  # 转换为秒
+                    end_time = (segment.get('end_time', segment.get('end', 0))) / 1000
                     duration = end_time - start_time
+                    
+                    print(f"片段 {i}: start={start_time}s, end={end_time}s, duration={duration}s")
                     
                     if duration > 0:
                         segment_file = speaker_dir / f"{speaker}_segment_{i}.wav"
                         tools.runffmpeg([
-                            '-y', '-i', str(vocals_path),
+                            '-y', '-i', str(video_path),
                             '-ss', str(start_time), '-t', str(duration),
-                            '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
+                            '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
                             str(segment_file)
                         ])
                         segment_files.append(str(segment_file))
                 
-                # 合并所有片段
+                # 合并所有片段为 _spk[i] 文件
                 if segment_files:
                     concat_file = speaker_dir / f"{speaker}_concat.txt"
                     with open(concat_file, 'w') as f:
@@ -2671,11 +2726,44 @@ if __name__ == '__main__':
                     for seg_file in segment_files:
                         Path(seg_file).unlink(missing_ok=True)
                     concat_file.unlink(missing_ok=True)
+                    
+                    print(f"说话人 '{speaker}' 音频切分完成: {speaker_audio_path}")
+                else:
+                    print(f"说话人 '{speaker}' 没有有效的音频片段")
+                    return None
             
-            return speaker_audio_path if speaker_audio_path.exists() else None
+            # 第二步：对 _spk[i] 文件用Demucs去背景音，生成 _vocal_spk[i] 文件
+            vocal_audio_path = speaker_dir / f"vocal_spk{speaker.replace('spk', '')}.wav"
+            if not vocal_audio_path.exists():
+                print(f"正在使用Demucs分离人声: {vocal_audio_path}")
+                
+                # 使用Demucs分离人声
+                success = separate_voice_background_demucs(str(speaker_audio_path), str(speaker_dir))
+                
+                if success:
+                    # Demucs生成的文件名是background.wav和vocal.wav
+                    demucs_vocal_path = speaker_dir / "vocal.wav"
+                    if demucs_vocal_path.exists():
+                        # 复制到我们期望的文件名 _vocal_spk[i]
+                        import shutil
+                        shutil.copy2(demucs_vocal_path, vocal_audio_path)
+                        print(f"Demucs人声分离成功: {vocal_audio_path}")
+                    else:
+                        print("Demucs人声文件不存在，使用原始音频")
+                        import shutil
+                        shutil.copy2(speaker_audio_path, vocal_audio_path)
+                else:
+                    print("Demucs分离失败，使用原始音频")
+                    import shutil
+                    shutil.copy2(speaker_audio_path, vocal_audio_path)
+            
+            # 返回vocal文件路径用于声音克隆
+            return vocal_audio_path if vocal_audio_path.exists() else None
             
         except Exception as e:
             print(f"提取说话人音频失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def delete_all_custom_voices():
@@ -3022,6 +3110,60 @@ if __name__ == '__main__':
             print(f"TTS生成失败: {str(e)}")
             return False
 
+    def adjust_audio_length_and_volume(audio_file, target_duration_ms, volume_boost=1.5):
+        """调整音频长度和音量"""
+        try:
+            from videotrans.util import tools
+            
+            # 创建临时文件
+            temp_file = audio_file.parent / f"temp_{audio_file.name}"
+            
+            # 获取原始音频时长
+            import subprocess
+            result = subprocess.run([
+                'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+                '-of', 'csv=p=0', str(audio_file)
+            ], capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                print(f"无法获取音频时长: {audio_file}")
+                return audio_file
+            
+            original_duration = float(result.stdout.strip())
+            target_duration = target_duration_ms / 1000.0
+            
+            print(f"原始时长: {original_duration:.2f}s, 目标时长: {target_duration:.2f}s")
+            
+            # 计算速度调整比例
+            speed_ratio = original_duration / target_duration
+            
+            if abs(speed_ratio - 1.0) < 0.01:  # 如果差异很小，只调整音量
+                print("时长差异很小，只调整音量")
+                tools.runffmpeg([
+                    '-y', '-i', str(audio_file),
+                    '-af', f'volume={volume_boost}',
+                    '-ar', '44100', '-ac', '2',
+                    str(temp_file)
+                ])
+            else:
+                print(f"调整速度比例: {speed_ratio:.3f}")
+                # 使用atempo滤镜调整速度，同时调整音量
+                tools.runffmpeg([
+                    '-y', '-i', str(audio_file),
+                    '-af', f'atempo={speed_ratio},volume={volume_boost}',
+                    '-ar', '44100', '-ac', '2',
+                    str(temp_file)
+                ])
+            
+            # 替换原文件
+            temp_file.replace(audio_file)
+            print(f"音频调整完成: {audio_file}")
+            return audio_file
+            
+        except Exception as e:
+            print(f"音频调整失败: {str(e)}")
+            return audio_file
+
     def synthesize_final_audio(audio_segments, output_file, total_duration):
         """合成最终音频文件"""
         try:
@@ -3042,6 +3184,8 @@ if __name__ == '__main__':
             
             for i, segment in enumerate(audio_segments):
                 start_time = segment['start_time'] / 1000  # 转换为秒
+                end_time = segment['end_time'] / 1000
+                target_duration = segment['duration']  # 毫秒
                 audio_file = segment['file']
                 
                 # 检查文件是否存在
@@ -3049,15 +3193,19 @@ if __name__ == '__main__':
                     print(f"警告：音频文件不存在，跳过: {audio_file}")
                     continue
                 
+                # 调整音频长度和音量
+                print(f"调整音频片段 {i+1}: {audio_file}")
+                adjusted_audio = adjust_audio_length_and_volume(audio_file, target_duration, volume_boost=1.5)
+                
                 # 添加输入文件
-                inputs.extend(['-i', audio_file])
+                inputs.extend(['-i', str(adjusted_audio)])
                 
                 # 记录有效的片段索引（从1开始，因为0是静音文件）
                 current_index = len(valid_segments) + 1
                 valid_segments.append({
                     'index': current_index,
                     'start_time': start_time,
-                    'file': audio_file
+                    'file': str(adjusted_audio)
                 })
                 
                 # 添加覆盖滤镜
