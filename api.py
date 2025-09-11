@@ -464,6 +464,36 @@ if __name__ == '__main__':
                     z-index: 1000;
                     display: none;
                 }}
+                /* 合成等待弹窗 */
+                .modal-overlay {{
+                    position: fixed;
+                    top: 0; left: 0; right: 0; bottom: 0;
+                    background: rgba(0,0,0,0.4);
+                    display: none;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 2000;
+                }}
+                .modal {{
+                    background: #fff;
+                    width: 380px;
+                    border-radius: 10px;
+                    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                    padding: 16px 18px;
+                    text-align: center;
+                }}
+                .modal h4 {{ margin: 8px 0 6px; font-size: 16px; }}
+                .modal p {{ margin: 6px 0 0; color: #555; font-size: 13px; min-height: 18px; }}
+                .spinner {{
+                    width: 28px; height: 28px;
+                    border: 3px solid #eee; border-top-color: #007AFF;
+                    border-radius: 50%;
+                    margin: 6px auto 4px;
+                    animation: spin 0.8s linear infinite;
+                }}
+                @keyframes spin {{
+                    to {{ transform: rotate(360deg); }}
+                }}
             </style>
         </head>
         <body>
@@ -507,6 +537,14 @@ if __name__ == '__main__':
                     </div>
                 </div>
             </div>
+            <!-- 合成视频等待弹窗 -->
+            <div id="synthModal" class="modal-overlay">
+              <div class="modal">
+                <div class="spinner"></div>
+                <h4>正在合成视频</h4>
+                <p id="synthModalMsg">请稍候...</p>
+              </div>
+            </div>
 
             <script>
             const taskId = ((TASK_ID_JSON));
@@ -531,10 +569,20 @@ if __name__ == '__main__':
             const zoomOutBtn = document.getElementById('zoomOut');
             const zoomResetBtn = document.getElementById('zoomReset');
             const saveTimelineBtn = document.getElementById('saveTimeline');
+            const synthModal = document.getElementById('synthModal');
+            const synthModalMsg = document.getElementById('synthModalMsg');
             let cues = [];
             let videoMs = 0;
             let speakers = [];
             let speakerColors = {}; // 存储说话人对应的颜色
+
+            function showSynthModal(msg) {
+                synthModalMsg.textContent = msg || '请稍候...';
+                synthModal.style.display = 'flex';
+            }
+            function hideSynthModal() {
+                synthModal.style.display = 'none';
+            }
 
             function fmtMs(ms) {
                 const s = Math.floor(ms/1000); const hh = String(Math.floor(s/3600)).padStart(2,'0');
@@ -1500,9 +1548,10 @@ if __name__ == '__main__':
                     const confirmed = confirm('开始合成视频？这将使用Demucs分离原视频人声，然后与TTS音频合成新视频。');
                     if (!confirmed) return;
                     
-                    // 显示进度提示
+                    // 显示进度提示 + 弹窗
                     btnSynthesizeVideo.textContent = '合成中...';
                     btnSynthesizeVideo.disabled = true;
+                    showSynthModal('正在启动任务...');
                     
                     // 准备视频合成请求数据
                     const payload = { 
@@ -1526,11 +1575,59 @@ if __name__ == '__main__':
                         body: JSON.stringify(payload)
                     });
                     const data = await res.json();
-                    
-                    if (data && data.code === 0) {
-                        alert('视频合成任务已启动，请稍后查看结果');
-                        // 跳转到任务状态页面
-                        window.open(`/synthesis_result/${data.task_id}`, '_blank');
+                    if (data && data.code === 0 && data.task_id) {
+                        const synthTaskId = data.task_id;
+                        // 轮询任务状态，完成后替换播放器视频源
+                        const poll = async () => {
+                            try {
+                                const r = await fetch(`/task_status?task_id=${synthTaskId}`);
+                                const s = await r.json();
+                                if (s.code === 0 && s.data && Array.isArray(s.data.url)) {
+                                    // 查找 result.mp4
+                                    let mp4 = s.data.url.find(u => /\/result\.mp4$/i.test(u));
+                                    if (!mp4) {
+                                        // 回退任意 mp4
+                                        mp4 = s.data.url.find(u => /\.mp4$/i.test(u));
+                                    }
+                                    if (mp4) {
+                                        hideSynthModal();
+                                        videoEl.src = mp4;
+                                        try { videoEl.load(); videoEl.play(); } catch (e) {}
+                                        return true;
+                                    } else {
+                                        hideSynthModal();
+                                        // 打开结果页作为回退
+                                        window.open(`/synthesis_result/${synthTaskId}`, '_blank');
+                                        return true;
+                                    }
+                                } else if (s.code === -1) {
+                                    // 处理中
+                                    synthModalMsg.textContent = s.msg || '正在处理，请稍候...';
+                                    return false;
+                                } else {
+                                    synthModalMsg.textContent = (s && s.msg) ? `失败：${s.msg}` : '任务失败';
+                                    return true;
+                                }
+                            } catch (e) {
+                                synthModalMsg.textContent = '状态检查失败，稍后重试...';
+                                return false;
+                            }
+                        };
+                        // 启动轮询
+                        let done = false;
+                        showSynthModal('任务已启动，正在处理中...');
+                        for (let i = 0; i < 360; i++) { // 最长约12分钟（2s * 360）
+                            // eslint-disable-next-line no-await-in-loop
+                            done = await poll();
+                            if (done) break;
+                            // eslint-disable-next-line no-await-in-loop
+                            await new Promise(r => setTimeout(r, 2000));
+                        }
+                        if (!done) {
+                            hideSynthModal();
+                            alert('合成超时，请稍后在结果页查看');
+                            window.open(`/synthesis_result/${synthTaskId}`, '_blank');
+                        }
                     } else {
                         alert(data && data.msg ? data.msg : '视频合成启动失败');
                     }
@@ -1541,6 +1638,7 @@ if __name__ == '__main__':
                     // 恢复按钮状态
                     btnSynthesizeVideo.textContent = '合成视频';
                     btnSynthesizeVideo.disabled = false;
+                    hideSynthModal();
                 }
             }
 
@@ -3057,7 +3155,7 @@ if __name__ == '__main__':
             
             # 合成完整音频
             final_audio_file = audio_dir / f"{task_id}_final_audio.wav"
-            success = synthesize_final_audio(generated_audio_files, final_audio_file, total_duration)
+            success = synthesize_final_audio(generated_audio_files, final_audio_file, total_duration, regen_opts={"voice_mapping": voice_mapping})
             
             if not success:
                 return jsonify({"code": 1, "msg": "音频合成失败"}), 500
@@ -3080,8 +3178,8 @@ if __name__ == '__main__':
             traceback.print_exc()
             return jsonify({"code": 1, "msg": f"生成音频失败: {str(e)}"}), 500
 
-    def generate_tts_audio(text, voice_id, output_file):
-        """使用ElevenLabs生成TTS音频"""
+    def generate_tts_audio(text, voice_id, output_file, speaking_rate=None):
+        """使用ElevenLabs生成TTS音频，支持可选语速speaking_rate（倍率）。"""
         try:
             from elevenlabs import ElevenLabs
             import httpx
@@ -3092,12 +3190,20 @@ if __name__ == '__main__':
                 httpx_client=httpx.Client()
             )
             
+            kwargs = {
+                'voice_id': voice_id,
+                'text': text,
+                'model_id': "eleven_flash_v2_5"
+            }
+            # 尝试传入语速设置（若SDK/模型不支持则会被忽略或抛错）
+            if speaking_rate and speaking_rate > 0:
+                try:
+                    kwargs['voice_settings'] = {"speaking_rate": float(speaking_rate)}
+                except Exception:
+                    pass
+            
             # 生成TTS音频
-            audio = client.text_to_speech.convert(
-                voice_id=voice_id,
-                text=text,
-                model_id="eleven_flash_v2_5"
-            )
+            audio = client.text_to_speech.convert(**kwargs)
             
             # 保存音频文件
             with open(output_file, 'wb') as f:
@@ -3110,64 +3216,128 @@ if __name__ == '__main__':
             print(f"TTS生成失败: {str(e)}")
             return False
 
-    def adjust_audio_length_and_volume(audio_file, target_duration_ms, volume_boost=1.5):
-        """调整音频长度和音量"""
+    def adjust_audio_length_and_volume(audio_file, target_duration_ms, volume_boost=1.8):
+        """调整音频长度与音量，并强制匹配SRT目标时长。
+
+        - 自动计算变速比并用 atempo 调整（支持级联 atempo 以超出 0.5~2.0 范围）。
+        - 提升音量（默认 1.8）。
+        - 通过 apad + -t 精确修剪/补齐至目标时长。
+        """
         try:
             from videotrans.util import tools
-            
-            # 创建临时文件
-            temp_file = audio_file.parent / f"temp_{audio_file.name}"
-            
-            # 获取原始音频时长
+            from pathlib import Path as _Path
             import subprocess
-            result = subprocess.run([
+
+            audio_path = _Path(audio_file)
+            temp1 = audio_path.parent / f"temp_speedvol_{audio_path.name}"
+            temp2 = audio_path.parent / f"temp_exact_{audio_path.name}"
+
+            # 获取原始音频时长（秒）
+            probe = subprocess.run([
                 'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
-                '-of', 'csv=p=0', str(audio_file)
+                '-of', 'csv=p=0', str(audio_path)
             ], capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                print(f"无法获取音频时长: {audio_file}")
-                return audio_file
-            
-            original_duration = float(result.stdout.strip())
-            target_duration = target_duration_ms / 1000.0
-            
-            print(f"原始时长: {original_duration:.2f}s, 目标时长: {target_duration:.2f}s")
-            
-            # 计算速度调整比例
-            speed_ratio = original_duration / target_duration
-            
-            if abs(speed_ratio - 1.0) < 0.01:  # 如果差异很小，只调整音量
-                print("时长差异很小，只调整音量")
+            if probe.returncode != 0 or not probe.stdout.strip():
+                print(f"无法获取音频时长: {audio_path}")
+                return audio_path
+
+            original_duration = float(probe.stdout.strip())
+            target_duration = max(0.01, float(target_duration_ms) / 1000.0)
+            print(f"原始时长: {original_duration:.3f}s, 目标时长: {target_duration:.3f}s")
+
+            # 计算速度调整比例：>1 加速（缩短），<1 减速（拉长）。限制在 ±20% 内更自然
+            raw_ratio = original_duration / target_duration if target_duration > 0 else 1.0
+            speed_ratio = max(0.8, min(1.2, raw_ratio))
+
+            # 构建 atempo 级联链，保证每段处于 [0.5, 2.0]
+            def build_atempo_chain(ratio: float) -> str:
+                chain = []
+                r = ratio
+                # 处理极端值，分段逼近
+                while r > 2.0:
+                    chain.append('atempo=2.0')
+                    r /= 2.0
+                while r < 0.5:
+                    chain.append('atempo=0.5')
+                    r /= 0.5
+                # 最后一段（处于0.5~2.0）
+                chain.append(f'atempo={r:.5f}')
+                return ','.join(chain)
+
+            if abs(speed_ratio - 1.0) < 0.01:
+                print("时长差异很小，仅提升音量")
                 tools.runffmpeg([
-                    '-y', '-i', str(audio_file),
+                    '-y', '-i', str(audio_path),
                     '-af', f'volume={volume_boost}',
-                    '-ar', '44100', '-ac', '2',
-                    str(temp_file)
+                    '-ar', '44100', '-ac', '2', str(temp1)
                 ])
             else:
-                print(f"调整速度比例: {speed_ratio:.3f}")
-                # 使用atempo滤镜调整速度，同时调整音量
+                atempo_chain = build_atempo_chain(speed_ratio)
+                print(f"使用受限变速链(±20%): {atempo_chain} (原始建议比率={raw_ratio:.3f})")
                 tools.runffmpeg([
-                    '-y', '-i', str(audio_file),
-                    '-af', f'atempo={speed_ratio},volume={volume_boost}',
-                    '-ar', '44100', '-ac', '2',
-                    str(temp_file)
+                    '-y', '-i', str(audio_path),
+                    '-af', f'{atempo_chain},volume={volume_boost}',
+                    '-ar', '44100', '-ac', '2', str(temp1)
                 ])
-            
-            # 替换原文件
-            temp_file.replace(audio_file)
-            print(f"音频调整完成: {audio_file}")
-            return audio_file
-            
+
+            # 第二步：用 apad + -t 精确到目标长度
+            tools.runffmpeg([
+                '-y', '-i', str(temp1),
+                '-af', 'apad', '-t', f'{target_duration:.6f}',
+                '-ar', '44100', '-ac', '2', str(temp2)
+            ])
+
+            # 校验输出时长，必要时再精修剪/补齐
+            probe2 = subprocess.run([
+                'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+                '-of', 'csv=p=0', str(temp2)
+            ], capture_output=True, text=True)
+            try:
+                out_dur = float((probe2.stdout or '0').strip())
+            except Exception:
+                out_dur = 0.0
+            if out_dur <= 0 or abs(out_dur - target_duration) > 0.01:
+                # 再通过 atrim 精准修正
+                print(f"输出时长偏差 {out_dur:.3f}s，目标 {target_duration:.3f}s，执行精修...")
+                tmp_final = audio_path.parent / f"tmp_final_{audio_path.name}"
+                tools.runffmpeg([
+                    '-y', '-i', str(temp2),
+                    '-af', f'atrim=0:{target_duration:.6f},asetpts=N/SR/TB',
+                    '-ar', '44100', '-ac', '2', str(tmp_final)
+                ])
+                tmp_final.replace(audio_path)
+            else:
+                # 替换原文件
+                temp2.replace(audio_path)
+            # 清理临时文件
+            try: temp1.unlink(missing_ok=True)
+            except Exception: pass
+            print(f"音频调整完成: {audio_path}")
+            return audio_path
+
         except Exception as e:
             print(f"音频调整失败: {str(e)}")
             return audio_file
 
-    def synthesize_final_audio(audio_segments, output_file, total_duration):
+    def synthesize_final_audio(audio_segments, output_file, total_duration, regen_opts=None):
         """合成最终音频文件"""
         try:
             from videotrans.util import tools
+            import subprocess
+            from pathlib import Path as _Path
+
+            regen_opts = regen_opts or {}
+            voice_mapping = regen_opts.get('voice_mapping') or {}
+
+            def _get_dur_sec(p: _Path) -> float:
+                r = subprocess.run([
+                    'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+                    '-of', 'csv=p=0', str(p)
+                ], capture_output=True, text=True)
+                try:
+                    return float((r.stdout or '0').strip())
+                except Exception:
+                    return 0.0
             
             # 创建静音文件作为基础 - 修复FFmpeg参数
             silence_file = output_file.parent / "silence.wav"
@@ -3185,7 +3355,8 @@ if __name__ == '__main__':
             for i, segment in enumerate(audio_segments):
                 start_time = segment['start_time'] / 1000  # 转换为秒
                 end_time = segment['end_time'] / 1000
-                target_duration = segment['duration']  # 毫秒
+                # 兼容缺失 duration 的场景，回退为 end-start
+                target_duration = int(segment.get('duration', segment['end_time'] - segment['start_time']))  # 毫秒
                 audio_file = segment['file']
                 
                 # 检查文件是否存在
@@ -3193,19 +3364,47 @@ if __name__ == '__main__':
                     print(f"警告：音频文件不存在，跳过: {audio_file}")
                     continue
                 
-                # 调整音频长度和音量
-                print(f"调整音频片段 {i+1}: {audio_file}")
-                adjusted_audio = adjust_audio_length_and_volume(audio_file, target_duration, volume_boost=1.5)
+                # 计算与目标的比例
+                orig_sec = _get_dur_sec(Path(audio_file))
+                tgt_sec = max(0.01, target_duration/1000.0)
+                ratio = (orig_sec / tgt_sec) if tgt_sec > 0 else 1.0
+                print(f"片段 {i+1} 原始={orig_sec:.3f}s 目标={tgt_sec:.3f}s 比例={ratio:.3f}")
+
+                adjusted_path = Path(audio_file)
+                need_regen = (ratio < 0.8 or ratio > 1.2) and bool(voice_mapping) and ('text' in segment) and ('speaker' in segment) and segment.get('speaker') in voice_mapping
+
+                if need_regen:
+                    # 超过±20%，优先尝试通过 ElevenLabs 以不同语速重生成
+                    speaker = segment.get('speaker')
+                    text = segment.get('text', '')
+                    voice_id = voice_mapping.get(speaker)
+                    if voice_id and text:
+                        speaking_rate = max(0.5, min(2.0, (tgt_sec / orig_sec) if orig_sec > 0 else 1.0))
+                        regen_file = Path(audio_file).parent / f"regen_{Path(audio_file).name}"
+                        print(f"超出20%，尝试以语速 {speaking_rate:.3f} 重生成 ElevenLabs 片段...")
+                        ok = generate_tts_audio(text, voice_id, regen_file, speaking_rate=speaking_rate)
+                        if ok and regen_file.exists():
+                            new_ratio = (_get_dur_sec(regen_file) / tgt_sec) if tgt_sec > 0 else 1.0
+                            print(f"重生成结果时长比: {new_ratio:.3f}")
+                            adjusted_path = regen_file
+                        else:
+                            print("重生成失败，退回到20%范围内的变速处理")
+                            adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=1.8)
+                    else:
+                        adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=1.8)
+                else:
+                    # 在±20%内（或重生成不可用），用本地变速+增益对齐
+                    adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=1.8)
                 
                 # 添加输入文件
-                inputs.extend(['-i', str(adjusted_audio)])
+                inputs.extend(['-i', str(adjusted_path)])
                 
                 # 记录有效的片段索引（从1开始，因为0是静音文件）
                 current_index = len(valid_segments) + 1
                 valid_segments.append({
                     'index': current_index,
                     'start_time': start_time,
-                    'file': str(adjusted_audio)
+                    'file': str(adjusted_path)
                 })
                 
                 # 添加覆盖滤镜
@@ -3243,209 +3442,135 @@ if __name__ == '__main__':
             return False
 
     def start_video_synthesis_task(task_id, video_path, subtitles):
-        """启动视频合成任务的后台处理函数"""
+        """启动视频合成任务的后台处理函数
+
+        新流程（点击“合成视频”）：
+        1) 将输入视频音视频分离，生成 task_dir/video_only.mp4 与 task_dir/audio_only.wav
+        2) 对 audio_only.wav 进行 Demucs 分离，保留背景音为 task_dir/audio_background.wav
+        3) 从 原任务目录/generated_audio 中查找带 final 后缀的已合成音频，与背景音混合生成 task_dir/final_audio.wav
+        4) 使用 video_only.mp4 + final_audio.wav 合成 task_dir/result.mp4
+        """
         try:
-            from videotrans import tts
             from videotrans.util import tools
             import subprocess
-            
+            import shutil
+
             print(f"开始视频合成任务: {task_id}")
-            
-            # 创建任务目录
+            tools.set_process(text='[0/4] 初始化任务...', uuid=task_id)
+
+            # 任务目录（用于输出结果展示）
             task_dir = Path(TARGET_DIR) / task_id
             cache_dir = Path(config.TEMP_DIR) / task_id
             task_dir.mkdir(parents=True, exist_ok=True)
             cache_dir.mkdir(parents=True, exist_ok=True)
-            
-            # 1. 从视频中提取音频
-            print("提取视频音频...")
-            audio_path = cache_dir / "extracted_audio.wav"
-            tools.conver_to_16k(video_path, str(audio_path))
-            
-            # 2. 使用Demucs分离人声和背景音乐
-            print("使用Demucs分离人声...")
-            bgm_path = cache_dir / "background_music.wav"  # 背景音乐
-            vocal_path = cache_dir / "original_vocal.wav"   # 原人声
-            
-            try:
-                success = separate_voice_background_demucs(str(audio_path), str(cache_dir))
-                
-                if success:
-                    # Demucs生成的文件名是background.wav和vocal.wav
-                    demucs_bgm_path = cache_dir / "background.wav"
-                    demucs_vocal_path = cache_dir / "vocal.wav"
-                    
-                    if demucs_bgm_path.exists() and demucs_vocal_path.exists():
-                        # 复制到我们期望的文件名
-                        import shutil
-                        shutil.copy2(demucs_bgm_path, bgm_path)
-                        shutil.copy2(demucs_vocal_path, vocal_path)
-                        
-                        print(f"Demucs人声分离成功")
-                        print(f"背景音乐文件: {bgm_path} (大小: {bgm_path.stat().st_size / 1024:.1f} KB)")
-                        print(f"原人声文件: {vocal_path} (大小: {vocal_path.stat().st_size / 1024:.1f} KB)")
-                    else:
-                        print("Demucs输出文件不存在，使用原音频作为背景音乐")
-                        import shutil
-                        shutil.copy2(audio_path, bgm_path)
-                        print(f"复制原音频作为背景音乐: {bgm_path}")
-                else:
-                    print("Demucs人声分离失败，使用原音频作为背景音乐")
-                    # 复制原音频作为背景音乐
-                    import shutil
-                    shutil.copy2(audio_path, bgm_path)
-                    print(f"复制原音频作为背景音乐: {bgm_path}")
-                    
-            except Exception as e:
-                print(f"人声分离失败: {str(e)}")
-                print("使用原音频作为背景音乐（无分离）")
-                # 复制原音频作为背景音乐
-                import shutil
-                shutil.copy2(audio_path, bgm_path)
-                print(f"复制原音频作为背景音乐: {bgm_path}")
-            
-            # 3. 生成TTS音频
-            print("生成TTS音频...")
-            queue_tts = []
-            for i, subtitle in enumerate(subtitles):
-                if not subtitle.get('text', '').strip():
-                    continue
-                    
-                start_time = int(subtitle.get('start_time', 0))
-                end_time = int(subtitle.get('end_time', 0))
-                duration = end_time - start_time
-                
-                if duration <= 0:
-                    continue
-                
-                filename_md5 = tools.get_md5(
-                    f"edgetts-{start_time}-{end_time}-zh-CN-XiaoxiaoNeural-+0%-+0%-+0Hz-{len(subtitle['text'])}-{i}")
-                
-                tts_item = {
-                    "line": subtitle.get('line', i + 1),
-                    "text": subtitle['text'],
-                    "role": "zh-CN-XiaoxiaoNeural",
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "startraw": subtitle.get('startraw', ''),
-                    "endraw": subtitle.get('endraw', ''),
-                    "rate": "+20%",  # 提高语速20%
-                    "volume": "+0%",
-                    "pitch": "+0Hz",
-                    "tts_type": 0,  # EdgeTTS
-                    "filename": config.TEMP_DIR + f"/dubbing_cache/{filename_md5}.wav"
-                }
-                queue_tts.append(tts_item)
-            
-            if not queue_tts:
-                print("没有有效的字幕数据")
+
+            src_task_dir = Path(video_path).parent  # 原始任务目录（用于查找 generated_audio）
+
+            # Step 1: 音视频分离
+            print("[1/4] 正在分离音视频...")
+            tools.set_process(text='[1/4] 正在分离音视频...', uuid=task_id)
+            video_only_path = task_dir / "video_only.mp4"
+            audio_only_path = task_dir / "audio_only.wav"
+
+            # 提取无声视频
+            tools.runffmpeg([
+                '-y', '-i', str(video_path),
+                '-c:v', 'copy', '-an', str(video_only_path)
+            ])
+
+            # 提取音频（双声道、44100Hz、s16）
+            tools.runffmpeg([
+                '-y', '-i', str(video_path),
+                '-vn', '-ac', '2', '-ar', '44100', '-sample_fmt', 's16', str(audio_only_path)
+            ])
+
+            if not video_only_path.exists() or not audio_only_path.exists():
+                print("分离音视频失败：未生成 video_only 或 audio_only")
                 return
-            
-            # 创建缓存目录
-            Path(config.TEMP_DIR + "/dubbing_cache").mkdir(parents=True, exist_ok=True)
-            
-            # 设置TTS状态并生成音频
-            config.box_tts = 'ing'
-            try:
-                tts.run(queue_tts=queue_tts, language="zh-cn", 
-                       inst=None, uuid=task_id, play=False, is_test=False)
-                print("TTS音频生成完成")
-            except Exception as e:
-                print(f"TTS生成失败: {str(e)}")
-                import traceback
-                traceback.print_exc()
-                config.box_tts = 'stop'
-                return
-            finally:
-                config.box_tts = 'stop'
-            
-            # 4. 检查生成的TTS音频文件
-            audio_files = []
-            for item in queue_tts:
-                audio_path = Path(item['filename'])
-                if audio_path.exists():
-                    audio_files.append({
-                        'path': str(audio_path),
-                        'start_time': item['start_time'],
-                        'end_time': item['end_time'],
-                        'text': item['text']
-                    })
-            
-            if not audio_files:
-                print("没有生成任何TTS音频文件")
-                return
-            
-            # 5. 按时间顺序连接TTS音频
-            print("连接TTS音频...")
-            tts_audio_path = cache_dir / f"tts_audio_{int(time.time())}.wav"
-            success = concatenate_audio_files(audio_files, str(tts_audio_path))
-            
-            if not success:
-                print("TTS音频连接失败")
-                return
-            
-            # 6. 保存中间文件到任务目录（用于调试）
-            print("保存中间文件...")
-            task_bgm_path = task_dir / "background_music.wav"
-            task_tts_path = task_dir / "tts_audio.wav"
-            
-            import shutil
-            shutil.copy2(bgm_path, task_bgm_path)
-            shutil.copy2(tts_audio_path, task_tts_path)
-            print(f"背景音乐已保存: {task_bgm_path}")
-            print(f"TTS音频已保存: {task_tts_path}")
-            
-            # 7. 混合背景音乐和TTS音频
-            print("混合背景音乐和TTS音频...")
-            mixed_audio_path = cache_dir / f"mixed_audio_{int(time.time())}.wav"
-            success = mix_audio_files(str(bgm_path), str(tts_audio_path), str(mixed_audio_path))
-            
-            if not success:
-                print("音频混合失败")
-                return
-            
-            # 保存混合后的音频到任务目录
-            task_mixed_path = task_dir / "mixed_audio.wav"
-            shutil.copy2(mixed_audio_path, task_mixed_path)
-            print(f"混合音频已保存: {task_mixed_path}")
-            
-            # 8. 将混合音频与原视频画面合成
-            print("合成最终视频...")
-            final_video_path = task_dir / f"synthesized_video_{int(time.time())}.mp4"
-            
-            # 检查混合音频文件
-            mixed_file = Path(mixed_audio_path)
-            if mixed_file.exists():
-                print(f"混合音频文件大小: {mixed_file.stat().st_size / 1024:.1f} KB")
+
+            print(f"已生成: {video_only_path.name}, {audio_only_path.name}")
+
+            # Step 2: Demucs 分离保留背景音
+            print("[2/4] 正在使用 Demucs 分离背景音...")
+            tools.set_process(text='[2/4] 正在分离背景音...', uuid=task_id)
+            # 在任务目录下生成 background.wav / vocal.wav，然后重命名背景音为 audio_background.wav
+            demucs_ok = separate_voice_background_demucs(str(audio_only_path), str(task_dir))
+            bgm_source = task_dir / "background.wav"
+            audio_background_path = task_dir / "audio_background.wav"
+            if demucs_ok and bgm_source.exists():
+                shutil.copy2(bgm_source, audio_background_path)
+                print(f"背景音生成成功: {audio_background_path}")
             else:
-                print("混合音频文件不存在，无法合成视频")
+                # 失败时按文档回退使用原音频作为背景音
+                shutil.copy2(audio_only_path, audio_background_path)
+                print("Demucs 分离失败或输出缺失，使用原音频作为背景音")
+
+            # Step 3: 寻找 generated_audio 中的 final 音频并混合
+            print("[3/4] 正在查找 generated_audio 中的 final 音频...")
+            tools.set_process(text='[3/4] 正在混合人声与背景...', uuid=task_id)
+            gen_dir = src_task_dir / "generated_audio"
+            if not gen_dir.exists():
+                print(f"未找到目录: {gen_dir}")
                 return
-                
-            success = combine_audio_with_video_simple(str(mixed_audio_path), video_path, str(final_video_path))
-            
-            if success:
-                print(f"视频合成完成: {final_video_path}")
-                
-                # 保存任务结果信息
+
+            # 优先匹配包含 "final" 关键字的 wav，其次 m4a/mp3
+            candidates = []
+            for pat in ["*final*.wav", "*final*.m4a", "*final*.mp3", "*_final_audio.wav", "*_synthesized_audio.wav"]:
+                candidates.extend(sorted(gen_dir.glob(pat)))
+
+            # 去重并按修改时间倒序，选择最新的
+            uniq = []
+            seen = set()
+            for p in candidates:
+                if p.as_posix() not in seen:
+                    seen.add(p.as_posix())
+                    uniq.append(p)
+            if not uniq:
+                print("未找到带 final 后缀的已合成音频，请先生成合成音频")
+                return
+
+            uniq.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            tts_final_path = uniq[0]
+            print(f"使用已合成音频: {tts_final_path}")
+
+            final_audio_path = task_dir / "final_audio.wav"
+            ok_mix = mix_audio_files(str(audio_background_path), str(tts_final_path), str(final_audio_path))
+            if not ok_mix or not final_audio_path.exists():
+                print("混合背景音与已合成音频失败")
+                return
+            print(f"已生成最终音频: {final_audio_path}")
+
+            # Step 4: 合成最终视频
+            print("[4/4] 正在合成最终视频 result.mp4 ...")
+            tools.set_process(text='[4/4] 正在合成视频...', uuid=task_id)
+            result_video_path = task_dir / "result.mp4"
+            ok_video = combine_audio_with_video_simple(str(final_audio_path), str(video_only_path), str(result_video_path))
+            if ok_video:
+                print(f"视频合成完成: {result_video_path}")
+                tools.set_process(text='合成完成', type='succeed', uuid=task_id)
+
+                # 保存任务结果信息（用于结果页展示）
                 result_info = {
                     "task_id": task_id,
                     "status": "completed",
-                    "output_file": str(final_video_path),
-                    "download_url": f'/{API_RESOURCE}/{task_id}/{final_video_path.name}',
-                    "audio_count": len(audio_files),
-                    "total_duration": audio_files[-1]['end_time'] if audio_files else 0
+                    "output_file": str(result_video_path),
+                    "download_url": f'/{API_RESOURCE}/{task_id}/{result_video_path.name}'
                 }
-                
                 result_file = task_dir / "result.json"
                 with open(result_file, 'w', encoding='utf-8') as f:
                     json.dump(result_info, f, ensure_ascii=False, indent=2)
             else:
-                print("视频合成失败")
-                
+                print("视频合成失败：未生成 result.mp4")
+                tools.set_process(text='视频合成失败：未生成 result.mp4', type='error', uuid=task_id)
+
         except Exception as e:
             print(f"视频合成任务失败: {str(e)}")
             import traceback
             traceback.print_exc()
+            try:
+                tools.set_process(text=f'合成失败：{str(e)}', type='error', uuid=task_id)
+            except Exception:
+                pass
 
     def mix_audio_files(bgm_path, tts_path, output_path):
         """混合背景音乐和TTS音频"""
@@ -3467,13 +3592,14 @@ if __name__ == '__main__':
             print(f"背景音乐文件大小: {bgm_file.stat().st_size / 1024:.1f} KB")
             print(f"TTS音频文件大小: {tts_file.stat().st_size / 1024:.1f} KB")
             
-            # 使用更简单的混合方式，确保TTS音频为主，背景音乐为辅助
+            # 调整增益，提升整体响度：提升TTS与BGM音量，并关闭amix的normalize避免总体被压低
             cmd = [
                 'ffmpeg', '-y',
                 '-i', str(bgm_path),  # 背景音乐
                 '-i', str(tts_path),  # TTS音频
-                '-filter_complex', 
-                '[0:a]volume=0.3[bgm];[1:a]volume=1.0[tts];[bgm][tts]amix=inputs=2:duration=longest:dropout_transition=0[mixed]',
+                '-filter_complex',
+                '[0:a]volume=0.5[bgm];[1:a]volume=1.4[tts];' \
+                '[bgm][tts]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mixed]',
                 '-map', '[mixed]',
                 '-c:a', 'pcm_s16le',  # 使用PCM格式确保质量
                 '-ar', '44100',       # 采样率
@@ -3645,6 +3771,7 @@ if __name__ == '__main__':
         """按照SRT时间轴精确连接音频文件"""
         try:
             import subprocess
+            from pathlib import Path as _Path
             
             if not audio_files:
                 print("没有音频文件需要连接")
@@ -3667,11 +3794,18 @@ if __name__ == '__main__':
             for i, audio_file in enumerate(audio_files):
                 start_sec = audio_file['start_time'] / 1000.0
                 end_sec = audio_file['end_time'] / 1000.0
-                duration_sec = end_sec - start_sec
+                duration_sec = max(0.01, end_sec - start_sec)
                 
                 print(f"处理片段 {i+1}: {start_sec:.2f}s - {end_sec:.2f}s (时长: {duration_sec:.2f}s)")
                 
                 processed_file = temp_dir / f"processed_{i:04d}.wav"
+                # 在拼接前，先将片段本体强制拉伸/压缩到目标时长，并提升音量
+                try:
+                    adj_path = _Path(audio_file['path'])
+                    target_ms = int(round(duration_sec * 1000))
+                    adjust_audio_length_and_volume(adj_path, target_ms, volume_boost=1.8)
+                except Exception as _e:
+                    print(f"  ⚠️ 片段时长调整失败，使用原片段: {audio_file['path']} -> {_e}")
                 
                 # 计算需要添加的静音时长
                 if i == 0:
@@ -4123,7 +4257,9 @@ if __name__ == '__main__':
                 'ffmpeg', '-y',
                 '-i', bgm_path,
                 '-i', dubbing_path,
-                '-filter_complex', '[0:a][1:a]amix=inputs=2:duration=longest[mixed]',
+                '-filter_complex',
+                '[0:a]volume=0.5[bgm];[1:a]volume=1.4[tts];' \
+                '[bgm][tts]amix=inputs=2:duration=longest:normalize=0[mixed]',
                 '-map', '[mixed]',
                 '-c:a', 'aac',
                 '-b:a', '128k',
@@ -4493,399 +4629,6 @@ if __name__ == '__main__':
         </html>
         """
         return html
-
-    # 第1个接口 /tts
-    """
-    根据字幕合成配音接口
-    
-    请求数据类型: Content-Type:application
-    
-    请求参数：
-    
-    name:必须参数，字符串类型，需要配音的srt字幕的绝对路径(需同本软件在同一设备)，或者直接传递合法的srt字幕格式内容
-    tts_type:必须参数，数字类型，配音渠道，0="Edge-TTS",1='CosyVoice',2="ChatTTS",3=302.AI,4="FishTTS",5="Azure-TTS",
-        6="GPT-SoVITS",7="clone-voice",8="OpenAI TTS",9="Elevenlabs.io",10="Google TTS",11="自定义TTS API"
-    voice_role:必须参数，字符串类型，对应配音渠道的角色名，edge-tts/azure-tts/302.ai(azure模型)时目标语言不同，角色名也不同，具体见底部
-    target_language:必须参数，字符串类型，需要配音的语言类型代码，即所传递的字幕文字语言代码，可选值 简体中文zh-cn，繁体zh-tw，英语en，法语fr，德语de，日语ja，韩语ko，俄语ru，西班牙语es，泰国语th，意大利语it，葡萄牙语pt，越南语vi，阿拉伯语ar，土耳其语tr，印地语hi，匈牙利语hu，乌克兰语uk，印尼语id，马来语ms，哈萨克语kk，捷克语cs，波兰语pl，荷兰语nl，瑞典语sv
-    voice_rate:可选参数，字符串类型，语速加减值，格式为：加速`+数字%`，减速`-数字%`
-    volume:可选参数，字符串类型，音量变化值(仅配音渠道为edge-tts生效)，格式为 增大音量`+数字%`，降低音量`-数字%`
-    pitch:可选参数，字符串类型，音调变化值(仅配音渠道为edge-tts生效)，格式为 调大音调`+数字Hz`,降低音量`-数字Hz`
-    out_ext:可选参数，字符串类型，输出配音文件类型，mp3|wav|flac|aac,默认wav
-    voice_autorate:可选参数，布尔类型，默认False，是否自动加快语速，以便与字幕对齐
-    
-    返回数据：
-    返回类型：json格式，
-    成功时返回，可根据task_id通过 task_status 获取任务进度
-    {"code":0,"msg":"ok","task_id":任务id}
-    
-    失败时返回
-    {"code":1,"msg":"错误信息"}
-    
-    
-    请求示例
-    ```
-    def test_tts():
-        res=requests.post("http://127.0.0.1:9011/tts",json={
-        "name":"C:/users/c1/videos/zh0.srt",
-        "voice_role":"zh-CN-YunjianNeural",
-        "target_language_code":"zh-cn",
-        "voice_rate":"+0%",
-        "volume":"+0%",
-        "pitch":"+0Hz",
-        "tts_type":"0",
-        "out_ext":"mp3",
-        "voice_autorate":True,
-        })
-        print(res.json())
-    ```
-    """
-    @app.route('/tts', methods=['POST'])
-    def tts():
-        data = request.json
-        # 从请求数据中获取参数
-        name = data.get('name', '').strip()
-        if not name:
-            return jsonify({"code": 1, "msg": "The parameter name is not allowed to be empty"})
-        is_srt=True
-        if name.find("\n") == -1 and name.endswith('.srt'):
-            if not Path(name).exists():
-                return jsonify({"code": 1, "msg": f"The file {name} is not exist"})
-        else:
-            tmp_file = config.TEMP_DIR + f'/tts-srt-{time.time()}-{random.randint(1, 9999)}.srt'
-            is_srt=tools.is_srt_string(name)
-            Path(tmp_file).write_text(tools.process_text_to_srt_str(name) if not is_srt else name, encoding='utf-8')
-            name = tmp_file
-
-        cfg={
-            "name":name,
-            "voice_role":data.get("voice_role"),
-            "target_language_code":data.get('target_language_code'),
-            "tts_type":int(data.get('tts_type',0)),
-            "voice_rate":data.get('voice_rate',"+0%"),
-            "volume":data.get('volume',"+0%"),
-            "pitch":data.get('pitch',"+0Hz"),
-            "out_ext":data.get('out_ext',"mp3"),
-            "voice_autorate":bool(data.get('voice_autorate',False)) if is_srt else False,
-        }
-        is_allow_lang=tts_model.is_allow_lang(langcode=cfg['target_language_code'],tts_type=cfg['tts_type'])
-        if is_allow_lang is not True:
-            return jsonify({"code":4,"msg":is_allow_lang})
-        is_input_api=tts_model.is_input_api(tts_type=cfg['tts_type'],return_str=True)
-        if is_input_api is not True:
-            return jsonify({"code":5,"msg":is_input_api})
-
-
-        obj = tools.format_video(name, None)
-        obj['target_dir'] = TARGET_DIR + f'/{obj["uuid"]}'
-        obj['cache_folder'] = config.TEMP_DIR + f'/{obj["uuid"]}'
-        Path(obj['target_dir']).mkdir(parents=True, exist_ok=True)
-        cfg.update(obj)
-
-        config.box_tts = 'ing'
-        trk = DubbingSrt(cfg)
-        config.dubb_queue.append(trk)
-        tools.set_process(text=f"Currently in queue No.{len(config.dubb_queue)}",uuid=obj['uuid'])
-        return jsonify({'code': 0, 'task_id': obj['uuid']})
-
-
-    # 第2个接口 /translate_srt
-    """
-    字幕翻译接口
-    
-    请求参数:
-    类型 Content-Type:application/json
-    
-    请求数据:
-    name:必须参数，字符串类型，需要翻译的srt字幕的绝对路径(需同本软件在同一设备)，或者直接传递合法的srt字幕格式内容
-    translate_type：必须参数，整数类型，翻译渠道
-    target_language:必须参数，字符串类型，要翻译到的目标语言代码。可选值 简体中文zh-cn，繁体zh-tw，英语en，法语fr，德语de，日语ja，韩语ko，俄语ru，西班牙语es，泰国语th，意大利语it，葡萄牙语pt，越南语vi，阿拉伯语ar，土耳其语tr，印地语hi，匈牙利语hu，乌克兰语uk，印尼语id，马来语ms，哈萨克语kk，捷克语cs，波兰语pl，荷兰语nl，瑞典语sv
-    source_code:可选参数，字符串类型，原始字幕语言代码，可选同上
-    
-    返回数据
-    返回类型：json格式，
-    成功时返回，可根据task_id通过 task_status 获取任务进度
-    {"code":0,"msg":"ok","task_id":任务id}
-    
-    失败时返回
-    {"code":1,"msg":"错误信息"}
-    
-    请求示例
-    ```
-    def test_translate_srt():
-        res=requests.post("http://127.0.0.1:9011/translate_srt",json={
-        "name":"C:/users/c1/videos/zh0.srt",
-        "target_language":"en",
-        "translate_type":0
-        })
-        print(res.json())
-    ```
-    
-    """
-    @app.route('/translate_srt', methods=['POST'])
-    def translate_srt():
-        data = request.json
-        # 从请求数据中获取参数
-        name = data.get('name', '').strip()
-        if not name:
-            return jsonify({"code": 1, "msg": "The parameter name is not allowed to be empty"})
-        is_srt=True
-        if name.find("\n") == -1  and name.endswith('.srt'):
-            if not Path(name).exists():
-                return jsonify({"code": 1, "msg": f"The file {name} is not exist"})
-        else:
-            tmp_file = config.TEMP_DIR + f'/trans-srt-{time.time()}-{random.randint(1, 9999)}.srt'
-            is_srt=tools.is_srt_string(name)
-            Path(tmp_file).write_text(tools.process_text_to_srt_str(name) if not is_srt else name, encoding='utf-8')
-            name = tmp_file
-
-        cfg = {
-            "translate_type": int(data.get('translate_type', 0)),
-            "text_list": tools.get_subtitle_from_srt(name),
-            "target_code": data.get('target_language'),
-            "source_code": data.get('source_code', '')
-        }
-        is_allow=translator.is_allow_translate(translate_type=cfg['translate_type'],show_target=cfg['target_code'],return_str=True)
-        if is_allow is not True:
-            return jsonify({"code":5,"msg":is_allow})
-        obj = tools.format_video(name, None)
-        obj['target_dir'] = TARGET_DIR + f'/{obj["uuid"]}'
-        obj['cache_folder'] = config.TEMP_DIR + f'/{obj["uuid"]}'
-        Path(obj['target_dir']).mkdir(parents=True, exist_ok=True)
-        cfg.update(obj)
-
-        config.box_trans = 'ing'
-        trk = TranslateSrt(cfg)
-        config.trans_queue.append(trk)
-        tools.set_process(text=f"Currently in queue No.{len(config.trans_queue)}",uuid=obj['uuid'])
-        return jsonify({'code': 0, 'task_id': obj['uuid']})
-
-
-    # 第3个接口 /recogn
-    """
-    语音识别、音视频转字幕接口
-    
-    请求参数:
-    类型 Content-Type:application/json
-    
-    请求数据:
-    name:必须参数，字符串类型，需要翻译的音频或视频的绝对路径(需同本软件在同一设备)
-    recogn_type:必须参数，数字类型，语音识别模式，0=faster-whisper本地模型识别，1=openai-whisper本地模型识别，2=Google识别api，3=zh_recogn中文识别，4=豆包模型识别，5=自定义识别API，6=OpenAI识别API
-    model_name:必须参数faster-whisper和openai-whisper模式时的模型名字
-    detect_language:必须参数，字符串类型，音视频中人类说话语言。中文zh，英语en，法语fr，德语de，日语ja，韩语ko，俄语ru，西班牙语es，泰国语th，意大利语it，葡萄牙语pt，越南语vi，阿拉伯语ar，土耳其语tr，印地语hi，匈牙利语hu，乌克兰语uk，印尼语id，马来语ms，哈萨克语kk，捷克语cs，波兰语pl，荷兰语nl，瑞典语sv
-    split_type：可选参数，字符串类型，默认all：整体识别，可选avg：均等分割
-    is_cuda:可选参数，布尔类型，是否启用CUDA加速，默认False
-    
-    返回数据
-    返回类型：json格式，
-    成功时返回，可根据task_id通过 task_status 获取任务进度
-    {"code":0,"msg":"ok","task_id":任务id}
-    
-    失败时返回
-    {"code":1,"msg":"错误信息"}
-    
-    示例
-    def test_recogn():
-        res=requests.post("http://127.0.0.1:9011/recogn",json={
-        "name":"/Users/duanyanbiao/Downloads/testtesttest.mp4",
-        "recogn_type":0,
-        "split_type":"all",
-        "model_name":"tiny",
-        "is_cuda":False,
-        "detect_language":"zh",
-        })
-        print(res.json())
-    
-    """
-    @app.route('/recogn', methods=['POST'])
-    def recogn():
-        data = request.json
-        # 从请求数据中获取参数
-        name = data.get('name', '').strip()
-        if not name:
-            return jsonify({"code": 1, "msg": "The parameter name is not allowed to be empty"})
-        if not Path(name).is_file():
-            return jsonify({"code": 1, "msg": f"The file {name} is not exist"})
-
-        cfg = {
-            "recogn_type": int(data.get('recogn_type', 0)),
-            "split_type": data.get('split_type', 'all'),
-            "model_name": data.get('model_name', 'tiny'),
-            "is_cuda": bool(data.get('is_cuda', False)),
-            "detect_language": data.get('detect_language', '')
-        }
-
-        is_allow=recognition.is_allow_lang(langcode=cfg['detect_language'],recogn_type=cfg['recogn_type'])
-        if is_allow is not True:
-            return jsonify({"code":5,"msg":is_allow})
-
-        is_input=recognition.is_input_api(recogn_type=cfg['recogn_type'],return_str=True)
-        if is_input is not True:
-            return jsonify({"code":5,"msg":is_input})
-
-
-        obj = tools.format_video(name, None)
-        obj['target_dir'] = TARGET_DIR + f'/{obj["uuid"]}'
-        obj['cache_folder'] = config.TEMP_DIR + f'/{obj["uuid"]}'
-        Path(obj['target_dir']).mkdir(parents=True, exist_ok=True)
-        cfg.update(obj)
-        config.box_recogn = 'ing'
-        trk = SpeechToText(cfg)
-        config.prepare_queue.append(trk)
-        tools.set_process(text=f"Currently in queue No.{len(config.prepare_queue)}",uuid=obj['uuid'])
-        return jsonify({'code': 0, 'task_id': obj['uuid']})
-
-
-    # 第4个接口
-    """
-    视频完整翻译接口
-    
-    
-    请求参数:
-    类型 Content-Type:application/json
-    
-    请求数据:
-    name:必须参数，字符串类型，需要翻译的音频或视频的绝对路径(需同本软件在同一设备)
-    recogn_type:必须参数，数字类型，语音识别模式，0=faster-whisper本地模型识别，1=openai-whisper本地模型识别，2=Google识别api，3=zh_recogn中文识别，4=豆包模型识别，5=自定义识别API，6=OpenAI识别API
-    model_name:必须参数faster-whisper和openai-whisper模式时的模型名字
-    split_type：可选参数，字符串类型，默认all：整体识别，可选avg：均等分割
-    is_cuda:可选参数，布尔类型，是否启用CUDA加速，默认False
-    translate_type：必须参数，整数类型，翻译渠道
-    target_language:必须参数，字符串类型，要翻译到的目标语言代码。可选值 简体中文zh-cn，繁体zh-tw，英语en，法语fr，德语de，日语ja，韩语ko，俄语ru，西班牙语es，泰国语th，意大利语it，葡萄牙语pt，越南语vi，阿拉伯语ar，土耳其语tr，印地语hi，匈牙利语hu，乌克兰语uk，印尼语id，马来语ms，哈萨克语kk，捷克语cs，波兰语pl，荷兰语nl，瑞典语sv
-    source_language:可选参数，字符串类型，原始字幕语言代码，可选同上
-    tts_type:必须参数，数字类型，配音渠道，0="Edge-TTS",1='CosyVoice',2="ChatTTS",3=302.AI,4="FishTTS",5="Azure-TTS",
-        6="GPT-SoVITS",7="clone-voice",8="OpenAI TTS",9="Elevenlabs.io",10="Google TTS",11="自定义TTS API"
-    voice_role:必须参数，字符串类型，对应配音渠道的角色名，edge-tts/azure-tts/302.ai(azure模型)时目标语言不同，角色名也不同，具体见底部
-    voice_rate:可选参数，字符串类型，语速加减值，格式为：加速`+数字%`，减速`-数字%`
-    volume:可选参数，字符串类型，音量变化值(仅配音渠道为edge-tts生效)，格式为 增大音量`+数字%`，降低音量`-数字%`
-    pitch:可选参数，字符串类型，音调变化值(仅配音渠道为edge-tts生效)，格式为 调大音调`+数字Hz`,降低音量`-数字Hz`
-    out_ext:可选参数，字符串类型，输出配音文件类型，mp3|wav|flac|aac,默认wav
-    voice_autorate:可选参数，布尔类型，默认False，是否自动加快语速，以便与字幕对齐
-    subtitle_type:可选参数，整数类型，默认0，字幕嵌入类型，0=不嵌入字幕，1=嵌入硬字幕，2=嵌入软字幕，3=嵌入双硬字幕，4=嵌入双软字幕
-    append_video：可选参数，布尔类型，默认False，如果配音后音频时长大于视频，是否延长视频末尾
-    only_video:可选参数，布尔类型，默认False，是否只生成视频文件，不生成字幕音频等
-    
-    返回数据
-    返回类型：json格式，
-    成功时返回，可根据task_id通过 task_status 获取任务进度
-    {"code":0,"msg":"ok","task_id":任务id}
-    
-    失败时返回
-    {"code":1,"msg":"错误信息"}
-    
-    示例
-    def test_trans_video():
-        res=requests.post("http://127.0.0.1:9011/trans_video",json={
-        "name":"C:/Users/c1/Videos/10ass.mp4",
-    
-        "recogn_type":0,
-        "split_type":"all",
-        "model_name":"tiny",
-    
-        "translate_type":0,
-        "source_language":"zh-cn",
-        "target_language":"en",
-    
-        "tts_type":0,
-        "voice_role":"zh-CN-YunjianNeural",
-        "voice_rate":"+0%",
-        "volume":"+0%",
-        "pitch":"+0Hz",
-        "voice_autorate":True,
-        "video_autorate":True,
-    
-        "is_separate":False,
-        "back_audio":"",
-        
-        "subtitle_type":1,
-        "append_video":False,
-    
-        "is_cuda":False,
-        })
-        print(res.json())
-    
-    """
-    @app.route('/trans_video', methods=['POST'])
-    def trans_video():
-        data = request.json
-        name = data.get('name', '')
-        if not name:
-            return jsonify({"code": 1, "msg": "The parameter name is not allowed to be empty"})
-        if not Path(name).exists():
-            return jsonify({"code": 1, "msg": f"The file {name} is not exist"})
-
-        cfg = {
-            # 通用
-            "name": name,
-
-            "is_separate": bool(data.get('is_separate', False)),
-            "back_audio": data.get('back_audio', ''),
-
-            # 识别
-            "recogn_type": int(data.get('recogn_type', 0)),
-            "split_type": data.get('split_type','all'),
-            "model_name": data.get('model_name','tiny'),
-            "cuda": bool(data.get('is_cuda',False)),
-
-            "subtitles": data.get("subtitles", ""),
-
-            # 翻译
-            "translate_type": int(data.get('translate_type', 0)),
-            "target_language": data.get('target_language'),
-            "source_language": data.get('source_language'),
-
-            # 配音
-            "tts_type": int(data.get('tts_type', 0)),
-            "voice_role": data.get('voice_role',''),
-            "voice_rate": data.get('voice_rate','+0%'),
-            "voice_autorate": bool(data.get('voice_autorate', False)),
-            "video_autorate": bool(data.get('video_autorate', False)),
-            "volume": data.get('volume','+0%'),
-            "pitch": data.get('pitch','+0Hz'),
-
-            "subtitle_type": int(data.get('subtitle_type', 0)),
-            "append_video": bool(data.get('append_video', False)),
-
-            "is_batch": True,
-            "app_mode": "biaozhun",
-
-            "only_video": bool(data.get('only_video', False))
-
-        }
-        if not cfg['subtitles']:
-            is_allow = recognition.is_allow_lang(langcode=cfg['target_language'], recogn_type=cfg['recogn_type'])
-            if is_allow is not True:
-                return jsonify({"code": 5, "msg": is_allow})
-
-            is_input = recognition.is_input_api(recogn_type=cfg['recogn_type'], return_str=True)
-            if is_input is not True:
-                return jsonify({"code": 5, "msg": is_input})
-        if cfg['source_language'] != cfg['target_language']:
-            is_allow=translator.is_allow_translate(translate_type=cfg['translate_type'],show_target=cfg['target_language'],return_str=True)
-            if is_allow is not True:
-                return jsonify({"code":5,"msg":is_allow})
-
-        if cfg['voice_role'] and cfg['voice_role'].lower()!='no' and cfg['target_language']:
-            is_allow_lang = tts_model.is_allow_lang(langcode=cfg['target_language'], tts_type=cfg['tts_type'])
-            if is_allow_lang is not True:
-                return jsonify({"code": 4, "msg": is_allow_lang})
-            is_input_api = tts_model.is_input_api(tts_type=cfg['tts_type'], return_str=True)
-            if is_input_api is not True:
-                return jsonify({"code": 5, "msg": is_input_api})
-
-
-
-        obj = tools.format_video(name, None)
-        obj['target_dir'] = TARGET_DIR + f'/{obj["uuid"]}'
-        obj['cache_folder'] = config.TEMP_DIR + f'/{obj["uuid"]}'
-        Path(obj['target_dir']).mkdir(parents=True, exist_ok=True)
-        cfg.update(obj)
-
-        config.current_status = 'ing'
-        trk = TransCreate(cfg)
-        config.prepare_queue.append(trk)
-        tools.set_process(text=f"Currently in queue No.{len(config.prepare_queue)}",uuid=obj['uuid'])
-        #
-        return jsonify({'code': 0, 'task_id': obj['uuid']})
 
 
     # 获取任务进度
