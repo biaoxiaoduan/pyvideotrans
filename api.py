@@ -507,8 +507,6 @@ if __name__ == '__main__':
                     
                     <button id=\"btnSynthesizeVideo\" style=\"padding:6px 12px; border:1px solid #ff6b35; background:#ff6b35; color:#fff; border-radius:6px; cursor:pointer;\">合成视频</button>
                     <button id=\"btnAddSubtitles\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">添加字幕</button>
-                    <button id=\"btnSaveSrt\" style=\"padding:6px 12px; border:1px solid #ddd; background:#fff; border-radius:6px; cursor:pointer;\">下载SRT(含spk)</button>
-                    <button id="btnSaveJson" style="padding:6px 12px; border:1px solid #ddd; background:#fff; border-radius:6px; cursor:pointer;">下载JSON</button>
                 </div>
             </header>
             <div class=\"container\">
