@@ -509,9 +509,17 @@ if __name__ == '__main__':
                     <button id=\"btnAddSubtitles\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">添加字幕</button>
                 </div>
             </header>
-            <div class=\"container\">
-                <div class=\"list\" id=\"subList\"></div>
-                <div class=\"player\">
+            <div class=\"container\"> 
+                <div>
+                    <div class=\"list-tools\" style=\"display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;\">
+                        <div style=\"font-size:12px; color:#666;\">字幕列表</div>
+                        <div>
+                            <button id=\"btnAddSpeakerOption\" style=\"padding:4px 8px; font-size:12px; border:1px solid #666; background:#fff; border-radius:6px; cursor:pointer;\">增加说话人选项</button>
+                        </div>
+                    </div>
+                    <div class=\"list\" id=\"subList\"></div>
+                </div>
+                <div class=\"player\"> 
                     <video id=\"video\" src=\"((VIDEO_URL))\" controls crossorigin=\"anonymous\" style=\"width:100%;max-height:60vh;background:#000\"></video>
                     <div class=\"timeline-wrap\" style=\"position: relative;\">
                         <div style=\"display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;\">
@@ -556,6 +564,7 @@ if __name__ == '__main__':
             const btnSynthesizeAudio = document.getElementById('btnSynthesizeAudio');
             const btnSynthesizeVideo = document.getElementById('btnSynthesizeVideo');
             const btnAddSubtitles = document.getElementById('btnAddSubtitles');
+            const btnAddSpeakerOption = document.getElementById('btnAddSpeakerOption');
             const dragHint = document.getElementById('dragHint');
             const zoomLevelEl = document.getElementById('zoomLevel');
             const visibleRangeEl = document.getElementById('visibleRange');
@@ -763,6 +772,11 @@ if __name__ == '__main__':
                     const spkSet = new Set(speakers || []);
                     if (c.speaker && !spkSet.has(c.speaker)) spkSet.add(c.speaker);
                     const optionList = Array.from(spkSet);
+                    // 允许选择空项以清空
+                    const emptyOpt = document.createElement('option');
+                    emptyOpt.value = '';
+                    emptyOpt.textContent = '（空）';
+                    sel.appendChild(emptyOpt);
                     optionList.forEach(s => {
                         const opt = document.createElement('option');
                         opt.value = s; opt.textContent = s; sel.appendChild(opt);
@@ -771,9 +785,33 @@ if __name__ == '__main__':
                     sel.addEventListener('change', () => { 
                         c.speaker = sel.value; 
                         triggerAutoSave(); // 说话人修改时也触发自动保存
+                        if (c.speaker && !speakers.includes(c.speaker)) {
+                            speakers.push(c.speaker);
+                        }
                     });
                     
                     speakerRow.appendChild(sel);
+
+                    // 行内新增/删除按钮
+                    const rowBtnWrap = document.createElement('div');
+                    rowBtnWrap.style.display = 'flex';
+                    rowBtnWrap.style.gap = '6px';
+                    
+                    const btnAdd = document.createElement('button');
+                    btnAdd.textContent = '+';
+                    btnAdd.title = '在此行下方插入一行（1秒）';
+                    btnAdd.style.cssText = 'padding:2px 8px; font-size:12px; border:1px solid #28a745; background:#fff; color:#28a745; border-radius:4px; cursor:pointer;';
+                    btnAdd.addEventListener('click', (ev) => { ev.stopPropagation(); addCueAfter(idx); });
+
+                    const btnDel = document.createElement('button');
+                    btnDel.textContent = '-';
+                    btnDel.title = '删除此行';
+                    btnDel.style.cssText = 'padding:2px 8px; font-size:12px; border:1px solid #dc3545; background:#fff; color:#dc3545; border-radius:4px; cursor:pointer;';
+                    btnDel.addEventListener('click', (ev) => { ev.stopPropagation(); deleteCueAt(idx); });
+
+                    rowBtnWrap.appendChild(btnAdd);
+                    rowBtnWrap.appendChild(btnDel);
+                    speakerRow.appendChild(rowBtnWrap);
                     tx.appendChild(speakerRow);
                     
                     // 原语言文本框
@@ -978,6 +1016,31 @@ if __name__ == '__main__':
                 updateSpeakerLegend();
             }
 
+            // 生成下一个 spkN 名称（若无 spkN，则从 spk0 开始）
+            function nextSpkName() {
+                const allSpeakers = new Set([...(speakers||[]), ...cues.map(c=>c.speaker).filter(Boolean)]);
+                let maxN = -1;
+                allSpeakers.forEach(s => {
+                    const m = /^spk(\d+)$/.exec(String(s||''));
+                    if (m) {
+                        const n = parseInt(m[1], 10);
+                        if (!isNaN(n)) maxN = Math.max(maxN, n);
+                    }
+                });
+                const next = maxN + 1;
+                return `spk${next}`;
+            }
+
+            // 增加一个可选说话人 [spkN]
+            if (btnAddSpeakerOption) {
+                btnAddSpeakerOption.addEventListener('click', () => {
+                    const newName = nextSpkName();
+                    if (!speakers.includes(newName)) speakers.push(newName);
+                    renderList();
+                    drawTimeline(videoEl.currentTime * 1000);
+                });
+            }
+
             function updateActive(currentMs) {
                 const items = listEl.querySelectorAll('.item');
                 items.forEach(el => el.classList.remove('active'));
@@ -1176,6 +1239,39 @@ if __name__ == '__main__':
                     // 触发自动保存
                     triggerAutoSave();
                 }
+            }
+
+            // 在指定行后插入一个长度为1秒的新字幕
+            function addCueAfter(index) {
+                if (index < 0 || index >= cues.length) return;
+                const base = cues[index];
+                let ns = Math.max(0, Math.min(videoMs, Number(base.end) || 0));
+                let ne = Math.min(videoMs, ns + 1000);
+                if (ne - ns < 100) { // 如果视频快结束了，兜底给100ms
+                    ns = Math.max(0, videoMs - 100);
+                    ne = videoMs;
+                }
+                const newCue = {
+                    start: ns,
+                    end: ne,
+                    startraw: fmtMs(ns),
+                    endraw: fmtMs(ne),
+                    text: '',
+                    speaker: ''
+                };
+                cues.splice(index + 1, 0, newCue);
+                renderList();
+                drawTimeline(videoEl.currentTime * 1000);
+                triggerAutoSave(true); // 立即保存
+            }
+
+            // 删除指定行字幕
+            function deleteCueAt(index) {
+                if (index < 0 || index >= cues.length) return;
+                cues.splice(index, 1);
+                renderList();
+                drawTimeline(videoEl.currentTime * 1000);
+                triggerAutoSave(true); // 立即保存
             }
 
             // 将屏幕坐标转换为时间
