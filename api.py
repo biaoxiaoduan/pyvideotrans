@@ -59,10 +59,10 @@ if __name__ == '__main__':
 
     app = Flask(__name__, static_folder=TARGET_DIR)
 
-    # 根路径重定向到上传查看页
+    # 根路径重定向到 FunASR 上传页
     @app.route('/', methods=['GET'])
     def index():
-        return redirect('/viewer')
+        return redirect('/funasr')
 
     # 直接提供 /apidata 静态访问，以便页面可直接访问上传的视频/字幕
     @app.route(f'/{API_RESOURCE}/<path:subpath>')
@@ -122,6 +122,13 @@ if __name__ == '__main__':
                 .row { display:flex; gap:12px; align-items:center; }
                 .hint { color:#666; font-size:12px; }
                 button { padding: 8px 14px; border:1px solid #ddd; background:#fff; border-radius:6px; cursor:pointer; }
+                /* 上传进度弹窗 */
+                .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 1000; }
+                .dialog { background: #fff; padding: 18px 20px; width: 380px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+                .dialog h4 { margin: 0 0 10px 0; font-size: 16px; }
+                .progress-wrap { height: 10px; background: #eee; border-radius: 999px; overflow: hidden; }
+                .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #4e8cff, #9c27b0); transition: width .15s ease; }
+                .progress-text { margin-top: 8px; font-size: 12px; color: #555; text-align: right; }
             </style>
         </head>
         <body>
@@ -130,12 +137,69 @@ if __name__ == '__main__':
                 <div class=\"hint\">上传视频，使用 FunASR 进行识别并生成含 [spkX] 的 SRT</div>
             </header>
             <main>
-                <form action=\"/funasr_run\" method=\"post\" enctype=\"multipart/form-data\">
-                    <div class=\"row\"><label>视频文件: <input type=\"file\" name=\"video\" accept=\"video/*,audio/*\" required></label></div>
+                <form id=\"funasrForm\" action=\"/funasr_run\" method=\"post\" enctype=\"multipart/form-data\">
+                    <div class=\"row\"><label>视频文件: <input id=\"videoFile\" type=\"file\" name=\"video\" accept=\"video/*,audio/*\" required></label></div>
                     <div class=\"row\"><label><input type=\"checkbox\" name=\"enable_spk\" checked> 启用说话人识别</label></div>
-                    <div class=\"row\"><button type=\"submit\">开始识别</button></div>
+                    <div class=\"row\"><button id=\"btnSubmit\" type=\"submit\">开始识别</button></div>
                 </form>
+                <!-- 上传进度弹窗 -->
+                <div id=\"uploadOverlay\" class=\"overlay\">
+                  <div class=\"dialog\">
+                    <h4>正在上传视频...</h4>
+                    <div class=\"progress-wrap\"><div id=\"progressBar\" class=\"progress-bar\"></div></div>
+                    <div id=\"progressText\" class=\"progress-text\">0%</div>
+                  </div>
+                </div>
             </main>
+            <script>
+            (function(){
+                const form = document.getElementById('funasrForm');
+                const fileInput = document.getElementById('videoFile');
+                const btn = document.getElementById('btnSubmit');
+                const overlay = document.getElementById('uploadOverlay');
+                const bar = document.getElementById('progressBar');
+                const text = document.getElementById('progressText');
+                function showOverlay(p){ overlay.style.display='flex'; if (typeof p==='number'){ bar.style.width=p+'%'; text.textContent=p.toFixed(0)+'%'; } }
+                function hideOverlay(){ overlay.style.display='none'; bar.style.width='0%'; text.textContent='0%'; }
+                form.addEventListener('submit', function(e){
+                    e.preventDefault();
+                    if (!fileInput || !fileInput.files || fileInput.files.length===0) { alert('请选择视频文件'); return; }
+                    const fd = new FormData(form);
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', form.action, true);
+                    try { btn.disabled = true; btn.textContent = '上传中...'; } catch(err){}
+                    showOverlay(0);
+                    let lastLoaded = 0; let lastTime = Date.now();
+                    xhr.upload.onprogress = function(ev){
+                        if (ev.lengthComputable) {
+                            const percent = Math.max(0, Math.min(100, ev.loaded/ev.total*100));
+                            bar.style.width = percent + '%';
+                            // 简单展示百分比
+                            text.textContent = percent.toFixed(0) + '%';
+                        } else {
+                            text.textContent = '正在上传...';
+                        }
+                    };
+                    xhr.onload = function(){
+                        hideOverlay();
+                        try { btn.disabled = false; btn.textContent = '开始识别'; } catch(err){}
+                        if (xhr.status >= 200 && xhr.status < 400) {
+                            // 跳转到后端返回的结果页（跟随重定向后 responseURL 指向最终地址）
+                            const to = xhr.responseURL || '/funasr';
+                            window.location.href = to;
+                        } else {
+                            alert('上传失败: ' + xhr.status + ' ' + (xhr.statusText||''));
+                        }
+                    };
+                    xhr.onerror = function(){
+                        hideOverlay();
+                        try { btn.disabled = false; btn.textContent = '开始识别'; } catch(err){}
+                        alert('上传出错，请重试');
+                    };
+                    xhr.send(fd);
+                });
+            })();
+            </script>
         </body>
         </html>
         """
