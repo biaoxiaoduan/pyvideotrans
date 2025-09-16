@@ -142,6 +142,20 @@ if __name__ == '__main__':
                     <div class=\"row\"><label><input type=\"checkbox\" name=\"enable_spk\" checked> 启用说话人识别</label></div>
                     <div class=\"row\"><button id=\"btnSubmit\" type=\"submit\">开始识别</button></div>
                 </form>
+                <div class=\"tasks\" style=\"max-width: 920px; margin-top: 20px;\">
+                  <div class=\"taskbar\" style=\"display:flex; align-items:center; gap:8px; justify-content: space-between;\">
+                    <h4 style=\"margin:0 0 8px 0; font-size: 16px;\">已有任务</h4>
+                    <div class=\"right\" style=\"display:flex; gap:8px;\">
+                      <button id=\"btnRefreshTasks\" type=\"button\" style=\"padding:6px 10px;font-size:12px;\">刷新</button>
+                    </div>
+                  </div>
+                  <div class=\"task-head\" style=\"display:grid;grid-template-columns:1fr 180px 120px;gap:12px;align-items:center;padding:8px 12px;background:#fafafa;border:1px solid #eee;border-bottom:none;border-radius:8px 8px 0 0;\">
+                    <div style=\"font-weight:600;font-size:12px;color:#333;\">task_id</div>
+                    <div style=\"font-weight:600;font-size:12px;color:#333;\">时间</div>
+                    <div style=\"font-weight:600;font-size:12px;color:#333;\">操作</div>
+                  </div>
+                  <ul id=\"taskList\" class=\"task-list\" style=\"margin: 0; padding: 0; list-style: none; border:1px solid #eee; border-radius:0 0 8px 8px; overflow:hidden;\"></ul>
+                </div>
                 <!-- 上传进度弹窗 -->
                 <div id=\"uploadOverlay\" class=\"overlay\">
                   <div class=\"dialog\">
@@ -159,8 +173,25 @@ if __name__ == '__main__':
                 const overlay = document.getElementById('uploadOverlay');
                 const bar = document.getElementById('progressBar');
                 const text = document.getElementById('progressText');
+                const taskList = document.getElementById('taskList');
+                const btnRefreshTasks = document.getElementById('btnRefreshTasks');
                 function showOverlay(p){ overlay.style.display='flex'; if (typeof p==='number'){ bar.style.width=p+'%'; text.textContent=p.toFixed(0)+'%'; } }
                 function hideOverlay(){ overlay.style.display='none'; bar.style.width='0%'; text.textContent='0%'; }
+                async function loadTasks(){
+                    try{
+                        const res = await fetch('/funasr_tasks', { headers: { 'Accept': 'text/html' } });
+                        const html = await res.text();
+                        taskList.innerHTML = html && html.trim() ? html : '<li class="task-item" style="display:flex;gap:12px;align-items:center;padding:10px 12px;"><span class="task-meta" style="font-size:12px;color:#666;">暂无任务</span></li>';
+                        if (taskList.lastElementChild) taskList.lastElementChild.style.borderBottom='none';
+                    }catch(e){
+                        taskList.innerHTML = '<li class="task-item" style="display:flex;gap:12px;align-items:center;padding:10px 12px;"><span class="task-meta" style="font-size:12px;color:#666;">任务列表加载失败</span></li>';
+                        console.error(e);
+                    }
+                }
+                btnRefreshTasks && btnRefreshTasks.addEventListener('click', function(e){ e.preventDefault(); loadTasks(); });
+                // 首次进入页面自动加载一次
+                try { console.log('Load tasks from:', location.origin + '/funasr_tasks'); } catch(e) {}
+                loadTasks();
                 form.addEventListener('submit', function(e){
                     e.preventDefault();
                     if (!fileInput || !fileInput.files || fileInput.files.length===0) { alert('请选择视频文件'); return; }
@@ -348,6 +379,37 @@ if __name__ == '__main__':
         html = html.replace('((TASK_ID_JSON))', json.dumps(task_id))
         # 不使用模板引擎，直接返回
         return html
+
+    @app.route('/funasr_tasks', methods=['GET'])
+    def funasr_tasks():
+        try:
+            base = Path(TARGET_DIR)
+            if not base.exists():
+                return ''
+            # 只列出目录名长度为 10 的任务目录（task_id）
+            items = []
+            for d in base.iterdir():
+                if d.is_dir() and d.name not in {'processinfo'} and len(d.name) == 10:
+                    try:
+                        mtime = d.stat().st_mtime
+                    except Exception:
+                        mtime = 0
+                    items.append((d.name, mtime))
+            items.sort(key=lambda x: x[1], reverse=True)
+            # 生成 li 片段
+            lines = []
+            for name, mtime in items:
+                mtxt = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S') if mtime else ''
+                lines.append(
+                    f"<li class='task-item' style='display:grid;grid-template-columns:1fr 180px 120px;gap:12px;align-items:center;padding:10px 12px;border-bottom:1px solid #f0f0f0;'>"
+                    f"<div class='task-id' style='font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#333;'>{name}</div>"
+                    f"<div class='task-time' style='font-size:12px;color:#666;'>{mtxt}</div>"
+                    f"<div class='task-actions'><button type='button' onclick=\"location.href='/view/{name}'\" style='padding:4px 8px;font-size:12px;border:1px solid #007aff;background:#fff;color:#007aff;border-radius:4px;cursor:pointer;'>打开</button></div>"
+                    f"</li>"
+                )
+            return "\n".join(lines)
+        except Exception as e:
+            return f"<li class='task-item' style='display:flex;gap:12px;align-items:center;padding:10px 12px;'><span class='task-meta' style='font-size:12px;color:#666;'>加载失败: {str(e)}</span></li>", 500
 
     @app.route('/upload_viewer', methods=['POST'])
     def upload_viewer():
