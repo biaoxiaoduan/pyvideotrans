@@ -2172,8 +2172,10 @@ if __name__ == '__main__':
                         if (data.voice_clones && data.voice_clones.length > 0) {
                             alert(`语音克隆完成！成功为 ${data.voice_clones.length} 个说话人创建了语音克隆。`);
                             console.log('语音克隆结果:', data.voice_clones);
-                            // 显示生成音频按钮
-                            btnGenerateAudio.style.display = 'inline-block';
+                            // 显示生成音频按钮（若按钮存在）
+                            if (typeof btnGenerateAudio !== 'undefined' && btnGenerateAudio) {
+                                btnGenerateAudio.style.display = 'inline-block';
+                            }
                         } else {
                             alert('语音克隆失败：没有返回克隆结果');
                         }
@@ -4018,11 +4020,32 @@ if __name__ == '__main__':
                 chain.append(f'atempo={r:.5f}')
                 return ','.join(chain)
 
+            # 片段响度对齐：使用 EBU R128 loudnorm 将每段对齐至统一目标响度
+            # 可在 videotrans/cfg.json -> settings.segment_loudnorm_enable / segment_loudnorm_I / segment_loudnorm_TP / segment_loudnorm_LRA 调整
+            try:
+                ln_enable = bool(config.settings.get('segment_loudnorm_enable', True))
+            except Exception:
+                ln_enable = True
+            try:
+                ln_I = float(config.settings.get('segment_loudnorm_I', -16))
+            except Exception:
+                ln_I = -16.0
+            try:
+                ln_TP = float(config.settings.get('segment_loudnorm_TP', -1.5))
+            except Exception:
+                ln_TP = -1.5
+            try:
+                ln_LRA = float(config.settings.get('segment_loudnorm_LRA', 11))
+            except Exception:
+                ln_LRA = 11.0
+
+            loudnorm_str = f",loudnorm=I={ln_I}:TP={ln_TP}:LRA={ln_LRA}:print_format=summary" if ln_enable else ''
+
             if abs(speed_ratio - 1.0) < 0.01:
-                print("时长差异很小，仅提升音量")
+                print("时长差异很小，执行统一增益与响度对齐")
                 tools.runffmpeg([
                     '-y', '-i', str(audio_path),
-                    '-af', f'volume={volume_boost}',
+                    '-af', f'volume={volume_boost}{loudnorm_str}',
                     '-ar', '44100', '-ac', '2', str(temp1)
                 ])
             else:
@@ -4030,7 +4053,7 @@ if __name__ == '__main__':
                 print(f"使用受限变速链(±20%): {atempo_chain} (原始建议比率={raw_ratio:.3f})")
                 tools.runffmpeg([
                     '-y', '-i', str(audio_path),
-                    '-af', f'{atempo_chain},volume={volume_boost}',
+                    '-af', f'{atempo_chain},volume={volume_boost}{loudnorm_str}',
                     '-ar', '44100', '-ac', '2', str(temp1)
                 ])
 
@@ -4127,6 +4150,13 @@ if __name__ == '__main__':
                 adjusted_path = Path(audio_file)
                 need_regen = (ratio < 0.8 or ratio > 1.2) and bool(voice_mapping) and ('text' in segment) and ('speaker' in segment) and segment.get('speaker') in voice_mapping
 
+                # 裁剪/变速并在片段阶段提升响度
+                # 片段级音量增益（可在 videotrans/cfg.json 中通过 settings.audio_volume_boost 调整）
+                try:
+                    seg_vol_boost = float(config.settings.get('audio_volume_boost', 2.5))
+                except Exception:
+                    seg_vol_boost = 2.5
+
                 if need_regen:
                     # 超过±20%，优先尝试通过 ElevenLabs 以不同语速重生成
                     speaker = segment.get('speaker')
@@ -4143,12 +4173,12 @@ if __name__ == '__main__':
                             adjusted_path = regen_file
                         else:
                             print("重生成失败，退回到20%范围内的变速处理")
-                            adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=1.8)
+                            adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=seg_vol_boost)
                     else:
-                        adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=1.8)
+                        adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=seg_vol_boost)
                 else:
                     # 在±20%内（或重生成不可用），用本地变速+增益对齐
-                    adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=1.8)
+                    adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=seg_vol_boost)
                 
                 # 添加输入文件
                 inputs.extend(['-i', str(adjusted_path)])
@@ -4347,12 +4377,22 @@ if __name__ == '__main__':
             print(f"TTS音频文件大小: {tts_file.stat().st_size / 1024:.1f} KB")
             
             # 调整增益，提升整体响度：提升TTS与BGM音量，并关闭amix的normalize避免总体被压低
+            # 可通过 videotrans/cfg.json -> settings.mix_tts_gain / settings.mix_bgm_gain 调整
+            try:
+                mix_tts_gain = float(config.settings.get('mix_tts_gain', 2.0))
+            except Exception:
+                mix_tts_gain = 2.0
+            try:
+                mix_bgm_gain = float(config.settings.get('mix_bgm_gain', 0.5))
+            except Exception:
+                mix_bgm_gain = 0.5
+
             cmd = [
                 'ffmpeg', '-y',
                 '-i', str(bgm_path),  # 背景音乐
                 '-i', str(tts_path),  # TTS音频
                 '-filter_complex',
-                '[0:a]volume=0.5[bgm];[1:a]volume=1.4[tts];' \
+                f'[0:a]volume={mix_bgm_gain}[bgm];[1:a]volume={mix_tts_gain}[tts];' \
                 '[bgm][tts]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mixed]',
                 '-map', '[mixed]',
                 '-c:a', 'pcm_s16le',  # 使用PCM格式确保质量
@@ -4557,7 +4597,11 @@ if __name__ == '__main__':
                 try:
                     adj_path = _Path(audio_file['path'])
                     target_ms = int(round(duration_sec * 1000))
-                    adjust_audio_length_and_volume(adj_path, target_ms, volume_boost=1.8)
+                    try:
+                        seg_vol_boost = float(config.settings.get('audio_volume_boost', 2.5))
+                    except Exception:
+                        seg_vol_boost = 2.5
+                    adjust_audio_length_and_volume(adj_path, target_ms, volume_boost=seg_vol_boost)
                 except Exception as _e:
                     print(f"  ⚠️ 片段时长调整失败，使用原片段: {audio_file['path']} -> {_e}")
                 
@@ -5007,12 +5051,22 @@ if __name__ == '__main__':
             # 使用ffmpeg合成音频和视频
             # 1. 将背景音乐和配音混合
             mixed_audio = Path(output_path).parent / "mixed_audio.wav"
+            # 读取可调的混音增益
+            try:
+                mix_tts_gain = float(config.settings.get('mix_tts_gain', 2.0))
+            except Exception:
+                mix_tts_gain = 2.0
+            try:
+                mix_bgm_gain = float(config.settings.get('mix_bgm_gain', 0.5))
+            except Exception:
+                mix_bgm_gain = 0.5
+
             cmd1 = [
                 'ffmpeg', '-y',
                 '-i', bgm_path,
                 '-i', dubbing_path,
                 '-filter_complex',
-                '[0:a]volume=0.5[bgm];[1:a]volume=1.4[tts];' \
+                f'[0:a]volume={mix_bgm_gain}[bgm];[1:a]volume={mix_tts_gain}[tts];' \
                 '[bgm][tts]amix=inputs=2:duration=longest:normalize=0[mixed]',
                 '-map', '[mixed]',
                 '-c:a', 'aac',
