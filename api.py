@@ -28,8 +28,8 @@ if __name__ == '__main__':
     #### api文档 https://pyvideotrans.com/api-cn
     config.exec_mode='api'
     ROOT_DIR = config.ROOT_DIR
-    HOST = "127.0.0.1"
-    PORT = 9011
+    HOST = "0.0.0.0"
+    PORT = 8000
     if Path(ROOT_DIR+'/host.txt').is_file():
         host_str=Path(ROOT_DIR+'/host.txt').read_text(encoding='utf-8').strip()
         host_str=re.sub(r'https?://','',host_str).split(':')

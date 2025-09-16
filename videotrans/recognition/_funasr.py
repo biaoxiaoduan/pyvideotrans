@@ -28,12 +28,12 @@ class FunasrRecogn(BaseRecogn):
     def __post_init__(self):
         super().__post_init__()
 
-        proxy = os.environ.get('http_proxy')
-        if proxy:
-            self.shound_del = True
-            del os.environ['http_proxy']
-            del os.environ['https_proxy']
-            del os.environ['all_proxy']
+        #proxy = os.environ.get('http_proxy')
+        #if proxy:
+        #    self.shound_del = True
+        #    del os.environ['http_proxy']
+        #    del os.environ['https_proxy']
+        #    del os.environ['all_proxy']
 
     def remove_unwanted_characters(self, text: str) -> str:
         # 保留中文、日文、韩文、英文、数字和常见符号，去除其他字符
