@@ -630,6 +630,7 @@ if __name__ == '__main__':
                     <button id=\"btnTranslateSubtitle\" style=\"padding:6px 12px; border:1px solid #9c27b0; background:#9c27b0; color:#fff; border-radius:6px; cursor:pointer;\">1.翻译字幕</button>
                     <button id=\"btnSaveTranslation\" style=\"padding:6px 12px; border:1px solid #17a2b8; background:#17a2b8; color:#fff; border-radius:6px; cursor:pointer; display:none;\">保存翻译</button>
                     <button id=\"btnVoiceClone\" style=\"padding:6px 12px; border:1px solid #e91e63; background:#e91e63; color:#fff; border-radius:6px; cursor:pointer;\">语音克隆</button>
+                    <button id=\"btnSelectVoice\" style=\"padding:6px 12px; border:1px solid #673ab7; background:#673ab7; color:#fff; border-radius:6px; cursor:pointer;\">选择自带音色</button>
                     
                     <button id=\"btnSynthesizeVideo\" style=\"padding:6px 12px; border:1px solid #ff6b35; background:#ff6b35; color:#fff; border-radius:6px; cursor:pointer;\">合成视频</button>
                     <button id=\"btnAddSubtitles\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">添加字幕</button>
@@ -686,6 +687,7 @@ if __name__ == '__main__':
             const btnTranslateSubtitle = document.getElementById('btnTranslateSubtitle');
             const btnSaveTranslation = document.getElementById('btnSaveTranslation');
             const btnVoiceClone = document.getElementById('btnVoiceClone');
+            const btnSelectVoice = document.getElementById('btnSelectVoice');
             const btnGenerateAudio = document.getElementById('btnGenerateAudio');
             const btnSynthesizeAudio = document.getElementById('btnSynthesizeAudio');
             const btnSynthesizeVideo = document.getElementById('btnSynthesizeVideo');
@@ -2253,6 +2255,99 @@ if __name__ == '__main__':
                 }
             }
 
+            // 选择ElevenLabs自带音色并为说话人建立映射
+            async function onSelectVoice() {
+                try {
+                    // 收集当前说话人
+                    const spks = [...new Set(cues.map(c => c.speaker).filter(s => s && s.trim()))];
+                    if (spks.length === 0) { alert('没有检测到说话人'); return; }
+
+                    // 拉取ElevenLabs自带音色列表
+                    const res = await fetch(`/viewer_api/${taskId}/elevenlabs_voices`);
+                    const data = await res.json();
+                    if (!data || data.code !== 0) { alert(data && data.msg ? data.msg : '获取ElevenLabs音色失败'); return; }
+                    const voices = Array.isArray(data.voices) ? data.voices : [];
+                    if (voices.length === 0) { alert('未获取到ElevenLabs音色'); return; }
+
+                    // 构建对话框
+                    const dlg = document.createElement('div');
+                    dlg.className = 'modal-overlay';
+                    dlg.style.display = 'flex';
+                    dlg.innerHTML = `
+                      <div class="modal" style="max-width:720px;text-align:left;">
+                        <h4 style="margin-bottom:10px;">为说话人选择系统自带音色</h4>
+                        <div style="max-height:50vh; overflow:auto; border:1px solid #eee; border-radius:8px;">
+                          <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                            <thead>
+                              <tr style="background:#fafafa;">
+                                <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #eee;">说话人</th>
+                                <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #eee;">选择音色</th>
+                                <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #eee;">试听</th>
+                              </tr>
+                            </thead>
+                            <tbody id="voiceMapBody"></tbody>
+                          </table>
+                        </div>
+                        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:10px;">
+                          <button id="btnVoiceCancel" style="padding:6px 10px;">取消</button>
+                          <button id="btnVoiceSave" style="padding:6px 10px; background:#673ab7; color:#fff; border:none; border-radius:6px;">保存映射</button>
+                        </div>
+                      </div>`;
+                    document.body.appendChild(dlg);
+
+                    const bodyEl = dlg.querySelector('#voiceMapBody');
+                    const audioEl = new Audio();
+                    const premade = voices.filter(v => String(v.category||'').toLowerCase() !== 'cloned');
+                    const currentMapping = {};
+
+                    spks.forEach(spk => {
+                        const tr = document.createElement('tr');
+                        const tdSpk = document.createElement('td'); tdSpk.style.padding='6px 8px'; tdSpk.textContent = spk; tr.appendChild(tdSpk);
+                        const tdSel = document.createElement('td'); tdSel.style.padding='6px 8px';
+                        const sel = document.createElement('select'); sel.style.minWidth='260px';
+                        premade.forEach(v => { const opt = document.createElement('option'); opt.value=v.voice_id; opt.textContent = `${v.name}${v.category?(' ('+v.category+')'):''}`; sel.appendChild(opt); });
+                        tdSel.appendChild(sel); tr.appendChild(tdSel);
+                        const tdAct = document.createElement('td'); tdAct.style.padding='6px 8px';
+                        const btnPlay = document.createElement('button'); btnPlay.textContent='播放示例'; btnPlay.style.cssText='padding:4px 8px; font-size:12px;';
+                        btnPlay.addEventListener('click', () => {
+                            const v = voices.find(x => x.voice_id === sel.value);
+                            const url = v && v.preview_url ? v.preview_url : '';
+                            if (!url) { alert('该音色无示例'); return; }
+                            try { audioEl.pause(); audioEl.currentTime=0; } catch(e){}
+                            audioEl.src = url; audioEl.play().catch(()=>alert('无法播放示例'));
+                        });
+                        tdAct.appendChild(btnPlay); tr.appendChild(tdAct);
+                        bodyEl.appendChild(tr);
+                        currentMapping[spk] = sel; // 暂存select引用
+                    });
+
+                    dlg.addEventListener('click', (e) => { if (e.target === dlg) document.body.removeChild(dlg); });
+                    dlg.querySelector('#btnVoiceCancel').addEventListener('click', () => {
+                        try { audioEl.pause(); } catch(e){}
+                        document.body.removeChild(dlg);
+                    });
+                    dlg.querySelector('#btnVoiceSave').addEventListener('click', async () => {
+                        const mapping = {};
+                        Object.keys(currentMapping).forEach(spk => { const sel = currentMapping[spk]; mapping[spk] = sel.value; });
+                        try {
+                            const r = await fetch(`/viewer_api/${taskId}/save_voice_mapping`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ voice_mapping: mapping }) });
+                            const j = await r.json();
+                            if (j && j.code === 0) {
+                                alert('映射已保存！后续将使用所选音色进行TTS');
+                                try { audioEl.pause(); } catch(e){}
+                                document.body.removeChild(dlg);
+                            } else {
+                                alert(j && j.msg ? j.msg : '保存失败');
+                            }
+                        } catch (err) {
+                            console.error(err); alert('保存失败');
+                        }
+                    });
+                } catch (e) {
+                    console.error(e); alert('无法加载音色列表');
+                }
+            }
+
             // 合成音频功能 - 直接合成已生成的音频文件
             async function onSynthesizeAudio() {
                 try {
@@ -2406,6 +2501,7 @@ if __name__ == '__main__':
             btnTranslateSubtitle.addEventListener('click', onTranslateSubtitle);
             btnSaveTranslation.addEventListener('click', onSaveTranslation);
             btnVoiceClone.addEventListener('click', onVoiceClone);
+            btnSelectVoice.addEventListener('click', onSelectVoice);
             btnSynthesizeVideo.addEventListener('click', onSynthesizeVideo);
             btnAddSubtitles.addEventListener('click', onAddSubtitles);
             </script>
@@ -3306,6 +3402,48 @@ if __name__ == '__main__':
         except Exception as e:
             return jsonify({"code": 1, "msg": f"检查失败: {str(e)}"}), 500
 
+    @app.route('/viewer_api/<task_id>/elevenlabs_voices', methods=['GET'])
+    def viewer_list_elevenlabs_voices(task_id):
+        try:
+            if not config.params.get('elevenlabstts_key'):
+                return jsonify({"code": 1, "msg": "未配置ElevenLabs API密钥"}), 400
+            from elevenlabs import ElevenLabs
+            import httpx
+            client = ElevenLabs(api_key=config.params['elevenlabstts_key'], httpx_client=httpx.Client())
+            vs = client.voices.get_all()
+            out = []
+            for v in getattr(vs, 'voices', []) or []:
+                out.append({
+                    'voice_id': getattr(v, 'voice_id', ''),
+                    'name': getattr(v, 'name', ''),
+                    'category': getattr(v, 'category', ''),
+                    'preview_url': getattr(v, 'preview_url', '')
+                })
+            return jsonify({"code": 0, "voices": out})
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"获取音色失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/save_voice_mapping', methods=['POST'])
+    def viewer_save_voice_mapping(task_id):
+        try:
+            data = request.get_json(silent=True) or {}
+            mapping = data.get('voice_mapping') or {}
+            if not isinstance(mapping, dict) or not mapping:
+                return jsonify({"code": 1, "msg": "无有效映射数据"}), 400
+            task_dir = Path(TARGET_DIR) / task_id
+            task_dir.mkdir(parents=True, exist_ok=True)
+            mapping_file = task_dir / f"{task_id}_voice_mapping.json"
+            content = {
+                'task_id': task_id,
+                'voice_mapping': mapping,
+                'updated_at': datetime.now().isoformat()
+            }
+            with open(mapping_file, 'w', encoding='utf-8') as f:
+                json.dump(content, f, ensure_ascii=False, indent=2)
+            return jsonify({"code": 0, "msg": "已保存", "mapping_file": str(mapping_file)})
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"保存失败: {str(e)}"}), 500
+
     @app.route('/viewer_api/<task_id>/synthesize_audio', methods=['POST'])
     def viewer_synthesize_audio(task_id):
         """合成音频接口 - 直接合成已生成的音频文件"""
@@ -4063,9 +4201,12 @@ if __name__ == '__main__':
             target_duration = max(0.01, float(target_duration_ms) / 1000.0)
             print(f"原始时长: {original_duration:.3f}s, 目标时长: {target_duration:.3f}s")
 
-            # 计算速度调整比例：>1 加速（缩短），<1 减速（拉长）。限制在 ±20% 内更自然
+            # 计算速度调整比例：>1 加速（缩短），<1 减速（拉长）。
+            # 之前出于音质考虑限定在 ±20%，会导致差距过大时主要靠补齐/裁剪，听感不佳。
+            # 这里改为使用多段 atempo 级联，支持任意倍率（每段保持 0.5~2.0 范围）。
             raw_ratio = original_duration / target_duration if target_duration > 0 else 1.0
-            speed_ratio = max(0.8, min(1.2, raw_ratio))
+            # 不再强行夹取 ±20%，而是用级联 atempo 组合逼近目标倍率
+            speed_ratio = max(0.1, min(10.0, raw_ratio))
 
             # 构建 atempo 级联链，保证每段处于 [0.5, 2.0]
             def build_atempo_chain(ratio: float) -> str:
@@ -4089,13 +4230,13 @@ if __name__ == '__main__':
             except Exception:
                 ln_enable = True
             try:
-                ln_I = float(config.settings.get('segment_loudnorm_I', -16))
+                ln_I = float(config.settings.get('segment_loudnorm_I', -14))
             except Exception:
-                ln_I = -16.0
+                ln_I = -14.0
             try:
-                ln_TP = float(config.settings.get('segment_loudnorm_TP', -1.5))
+                ln_TP = float(config.settings.get('segment_loudnorm_TP', -1.0))
             except Exception:
-                ln_TP = -1.5
+                ln_TP = -1.0
             try:
                 ln_LRA = float(config.settings.get('segment_loudnorm_LRA', 11))
             except Exception:
@@ -4112,7 +4253,7 @@ if __name__ == '__main__':
                 ])
             else:
                 atempo_chain = build_atempo_chain(speed_ratio)
-                print(f"使用受限变速链(±20%): {atempo_chain} (原始建议比率={raw_ratio:.3f})")
+                print(f"使用多段变速链: {atempo_chain} (原始建议比率={raw_ratio:.3f})")
                 tools.runffmpeg([
                     '-y', '-i', str(audio_path),
                     '-af', f'{atempo_chain},volume={volume_boost}{loudnorm_str}',
@@ -4215,9 +4356,9 @@ if __name__ == '__main__':
                 # 裁剪/变速并在片段阶段提升响度
                 # 片段级音量增益（可在 videotrans/cfg.json 中通过 settings.audio_volume_boost 调整）
                 try:
-                    seg_vol_boost = float(config.settings.get('audio_volume_boost', 2.5))
+                    seg_vol_boost = float(config.settings.get('audio_volume_boost', 3.2))
                 except Exception:
-                    seg_vol_boost = 2.5
+                    seg_vol_boost = 3.2
 
                 if need_regen:
                     # 超过±20%，优先尝试通过 ElevenLabs 以不同语速重生成
@@ -4441,13 +4582,26 @@ if __name__ == '__main__':
             # 调整增益，提升整体响度：提升TTS与BGM音量，并关闭amix的normalize避免总体被压低
             # 可通过 videotrans/cfg.json -> settings.mix_tts_gain / settings.mix_bgm_gain 调整
             try:
-                mix_tts_gain = float(config.settings.get('mix_tts_gain', 2.0))
+                mix_tts_gain = float(config.settings.get('mix_tts_gain', 3.0))
             except Exception:
-                mix_tts_gain = 2.0
+                mix_tts_gain = 3.0
             try:
-                mix_bgm_gain = float(config.settings.get('mix_bgm_gain', 0.5))
+                mix_bgm_gain = float(config.settings.get('mix_bgm_gain', 0.3))
             except Exception:
-                mix_bgm_gain = 0.5
+                mix_bgm_gain = 0.3
+            # 最终主响度归一（可调）
+            try:
+                final_ln_I = float(config.settings.get('final_loudnorm_I', -14))
+            except Exception:
+                final_ln_I = -14.0
+            try:
+                final_ln_TP = float(config.settings.get('final_loudnorm_TP', -1.0))
+            except Exception:
+                final_ln_TP = -1.0
+            try:
+                final_ln_LRA = float(config.settings.get('final_loudnorm_LRA', 11))
+            except Exception:
+                final_ln_LRA = 11.0
 
             cmd = [
                 'ffmpeg', '-y',
@@ -4455,7 +4609,8 @@ if __name__ == '__main__':
                 '-i', str(tts_path),  # TTS音频
                 '-filter_complex',
                 f'[0:a]volume={mix_bgm_gain}[bgm];[1:a]volume={mix_tts_gain}[tts];' \
-                '[bgm][tts]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mixed]',
+                f'[bgm][tts]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[mix];' \
+                f'[mix]loudnorm=I={final_ln_I}:TP={final_ln_TP}:LRA={final_ln_LRA}:print_format=summary[mixed]',
                 '-map', '[mixed]',
                 '-c:a', 'pcm_s16le',  # 使用PCM格式确保质量
                 '-ar', '44100',       # 采样率
@@ -5115,13 +5270,27 @@ if __name__ == '__main__':
             mixed_audio = Path(output_path).parent / "mixed_audio.wav"
             # 读取可调的混音增益
             try:
-                mix_tts_gain = float(config.settings.get('mix_tts_gain', 2.0))
+                mix_tts_gain = float(config.settings.get('mix_tts_gain', 3.0))
             except Exception:
-                mix_tts_gain = 2.0
+                mix_tts_gain = 3.0
             try:
-                mix_bgm_gain = float(config.settings.get('mix_bgm_gain', 0.5))
+                mix_bgm_gain = float(config.settings.get('mix_bgm_gain', 0.3))
             except Exception:
-                mix_bgm_gain = 0.5
+                mix_bgm_gain = 0.3
+
+            # 最终主响度归一（可调）
+            try:
+                final_ln_I = float(config.settings.get('final_loudnorm_I', -14))
+            except Exception:
+                final_ln_I = -14.0
+            try:
+                final_ln_TP = float(config.settings.get('final_loudnorm_TP', -1.0))
+            except Exception:
+                final_ln_TP = -1.0
+            try:
+                final_ln_LRA = float(config.settings.get('final_loudnorm_LRA', 11))
+            except Exception:
+                final_ln_LRA = 11.0
 
             cmd1 = [
                 'ffmpeg', '-y',
@@ -5129,7 +5298,8 @@ if __name__ == '__main__':
                 '-i', dubbing_path,
                 '-filter_complex',
                 f'[0:a]volume={mix_bgm_gain}[bgm];[1:a]volume={mix_tts_gain}[tts];' \
-                '[bgm][tts]amix=inputs=2:duration=longest:normalize=0[mixed]',
+                f'[bgm][tts]amix=inputs=2:duration=longest:normalize=0[mix];' \
+                f'[mix]loudnorm=I={final_ln_I}:TP={final_ln_TP}:LRA={final_ln_LRA}:print_format=summary[mixed]',
                 '-map', '[mixed]',
                 '-c:a', 'aac',
                 '-b:a', '128k',
