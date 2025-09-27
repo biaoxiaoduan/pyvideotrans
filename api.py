@@ -2269,12 +2269,33 @@ if __name__ == '__main__':
                     const voices = Array.isArray(data.voices) ? data.voices : [];
                     if (voices.length === 0) { alert('未获取到ElevenLabs音色'); return; }
 
+                    // 获取已有映射（若存在）
+                    let existingMapping = {};
+                    try {
+                        const mappingRes = await fetch(`/viewer_api/${taskId}/check_voice_mapping?detail=1`);
+                        const mappingData = await mappingRes.json();
+                        if (mappingData && mappingData.code === 0 && mappingData.mapping) {
+                            existingMapping = mappingData.mapping;
+                        }
+                    } catch (err) {
+                        console.warn('读取已保存映射失败', err);
+                    }
+
+                    const availableModels = [
+                        'eleven_v3',
+                        'eleven_flash_v2_5',
+                        'eleven_multilingual_v2',
+                        'eleven_english_v3',
+                        'eleven_turbo_v3'
+                    ];
+                    const defaultModel = availableModels[0];
+
                     // 构建对话框
                     const dlg = document.createElement('div');
                     dlg.className = 'modal-overlay';
                     dlg.style.display = 'flex';
                     dlg.innerHTML = `
-                      <div class="modal" style="max-width:720px;text-align:left;">
+                      <div class="modal" style="max-width:880px;text-align:left;">
                         <h4 style="margin-bottom:10px;">为说话人选择系统自带音色</h4>
                         <div style="max-height:50vh; overflow:auto; border:1px solid #eee; border-radius:8px;">
                           <table style="width:100%; border-collapse:collapse; font-size:13px;">
@@ -2282,6 +2303,7 @@ if __name__ == '__main__':
                               <tr style="background:#fafafa;">
                                 <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #eee;">说话人</th>
                                 <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #eee;">选择音色</th>
+                                <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #eee;">TTS 模型</th>
                                 <th style="text-align:left; padding:6px 8px; border-bottom:1px solid #eee;">试听</th>
                               </tr>
                             </thead>
@@ -2301,12 +2323,51 @@ if __name__ == '__main__':
                     const currentMapping = {};
 
                     spks.forEach(spk => {
+                        const prev = existingMapping[spk];
+                        let prevVoiceId = '';
+                        let prevModelId = defaultModel;
+                        if (typeof prev === 'string') {
+                            prevVoiceId = prev;
+                        } else if (prev && typeof prev === 'object') {
+                            prevVoiceId = prev.voice_id || prev.id || prev.voice || '';
+                            if (prev.model_id || prev.model) {
+                                prevModelId = prev.model_id || prev.model;
+                            }
+                        }
+
                         const tr = document.createElement('tr');
                         const tdSpk = document.createElement('td'); tdSpk.style.padding='6px 8px'; tdSpk.textContent = spk; tr.appendChild(tdSpk);
+
                         const tdSel = document.createElement('td'); tdSel.style.padding='6px 8px';
                         const sel = document.createElement('select'); sel.style.minWidth='260px';
-                        premade.forEach(v => { const opt = document.createElement('option'); opt.value=v.voice_id; opt.textContent = `${v.name}${v.category?(' ('+v.category+')'):''}`; sel.appendChild(opt); });
+                        premade.forEach(v => {
+                            const opt = document.createElement('option');
+                            opt.value = v.voice_id;
+                            opt.textContent = `${v.name}${v.category?(' ('+v.category+')'):''}`;
+                            sel.appendChild(opt);
+                        });
+                        if (prevVoiceId) {
+                            sel.value = prevVoiceId;
+                        }
+                        if (!sel.value && sel.options.length) {
+                            sel.value = sel.options[0].value;
+                        }
                         tdSel.appendChild(sel); tr.appendChild(tdSel);
+
+                        const tdModel = document.createElement('td'); tdModel.style.padding='6px 8px';
+                        const modelSel = document.createElement('select');
+                        modelSel.style.minWidth = '220px';
+                        availableModels.forEach(model => {
+                            const opt = document.createElement('option');
+                            opt.value = model;
+                            opt.textContent = model;
+                            modelSel.appendChild(opt);
+                        });
+                        if (prevModelId) {
+                            modelSel.value = prevModelId;
+                        }
+                        tdModel.appendChild(modelSel); tr.appendChild(tdModel);
+
                         const tdAct = document.createElement('td'); tdAct.style.padding='6px 8px';
                         const btnPlay = document.createElement('button'); btnPlay.textContent='播放示例'; btnPlay.style.cssText='padding:4px 8px; font-size:12px;';
                         btnPlay.addEventListener('click', () => {
@@ -2318,7 +2379,8 @@ if __name__ == '__main__':
                         });
                         tdAct.appendChild(btnPlay); tr.appendChild(tdAct);
                         bodyEl.appendChild(tr);
-                        currentMapping[spk] = sel; // 暂存select引用
+
+                        currentMapping[spk] = { voiceSelect: sel, modelSelect: modelSel, original: prev };
                     });
 
                     dlg.addEventListener('click', (e) => { if (e.target === dlg) document.body.removeChild(dlg); });
@@ -2328,9 +2390,38 @@ if __name__ == '__main__':
                     });
                     dlg.querySelector('#btnVoiceSave').addEventListener('click', async () => {
                         const mapping = {};
-                        Object.keys(currentMapping).forEach(spk => { const sel = currentMapping[spk]; mapping[spk] = sel.value; });
+                        Object.keys(currentMapping).forEach(spk => {
+                            const refs = currentMapping[spk];
+                            if (!refs || !refs.voiceSelect) return;
+                            const voiceId = refs.voiceSelect.value;
+                            if (!voiceId) return;
+                            const entry = { voice_id: voiceId };
+                            if (refs.modelSelect && refs.modelSelect.value) {
+                                entry.model_id = refs.modelSelect.value;
+                            }
+                            const original = refs.original;
+                            if (original && typeof original === 'object') {
+                                if (original.voice_settings) {
+                                    entry.voice_settings = original.voice_settings;
+                                }
+                                if (original.speaking_rate !== undefined && original.speaking_rate !== null) {
+                                    entry.speaking_rate = original.speaking_rate;
+                                }
+                            }
+                            mapping[spk] = entry;
+                        });
+
+                        if (Object.keys(mapping).length === 0) {
+                            alert('未选择任何音色');
+                            return;
+                        }
+
                         try {
-                            const r = await fetch(`/viewer_api/${taskId}/save_voice_mapping`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ voice_mapping: mapping }) });
+                            const r = await fetch(`/viewer_api/${taskId}/save_voice_mapping`, {
+                                method:'POST',
+                                headers:{'Content-Type':'application/json'},
+                                body: JSON.stringify({ voice_mapping: mapping })
+                            });
                             const j = await r.json();
                             if (j && j.code === 0) {
                                 alert('映射已保存！后续将使用所选音色进行TTS');
@@ -3144,7 +3235,10 @@ if __name__ == '__main__':
                             "audio_file": str(speaker_audio_path)
                         }
                         voice_clones.append(voice_clone_info)
-                        voice_mapping[speaker] = clone_result.get('voice_id')
+                        voice_mapping[speaker] = {
+                            "voice_id": clone_result.get('voice_id'),
+                            "model_id": config.params.get('elevenlabstts_models') or "eleven_flash_v2_5"
+                        }
                         print(f"说话人 '{speaker}' 语音克隆成功，voice_id: {clone_result.get('voice_id')}")
                     else:
                         print(f"说话人 '{speaker}' 语音克隆失败")
@@ -3392,12 +3486,43 @@ if __name__ == '__main__':
             
             mapping_file = task_dir / f"{task_id}_voice_mapping.json"
             has_mapping = mapping_file.exists()
-            
-            return jsonify({
+
+            resp = {
                 "code": 0,
                 "has_mapping": has_mapping,
                 "mapping_file": str(mapping_file) if has_mapping else None
-            })
+            }
+
+            if has_mapping and request.args.get('detail') == '1':
+                try:
+                    with open(mapping_file, 'r', encoding='utf-8') as f:
+                        mapping_data = json.load(f)
+                    raw_voice_mapping = mapping_data.get('voice_mapping', {}) or {}
+                    normalized = {}
+                    for speaker_name, voice_info in raw_voice_mapping.items():
+                        entry = {
+                            'voice_id': None,
+                            'voice_settings': {},
+                            'model_id': None,
+                            'speaking_rate': None
+                        }
+                        if isinstance(voice_info, dict):
+                            entry['voice_id'] = voice_info.get('voice_id') or voice_info.get('id') or voice_info.get('voice')
+                            vs = voice_info.get('voice_settings')
+                            if isinstance(vs, dict):
+                                entry['voice_settings'] = {k: v for k, v in vs.items()}
+                            entry['model_id'] = voice_info.get('model_id') or voice_info.get('model')
+                            if voice_info.get('speaking_rate') is not None:
+                                entry['speaking_rate'] = voice_info.get('speaking_rate')
+                        else:
+                            entry['voice_id'] = str(voice_info).strip() if voice_info else None
+                        if entry['voice_id']:
+                            normalized[speaker_name] = entry
+                    resp['mapping'] = normalized
+                except Exception as e:
+                    resp['mapping_error'] = str(e)
+
+            return jsonify(resp)
             
         except Exception as e:
             return jsonify({"code": 1, "msg": f"检查失败: {str(e)}"}), 500
@@ -3554,10 +3679,34 @@ if __name__ == '__main__':
             with open(mapping_file, 'r', encoding='utf-8') as f:
                 mapping_data = json.load(f)
             
-            voice_mapping = mapping_data.get('voice_mapping', {})
-            if not voice_mapping:
+            raw_voice_mapping = mapping_data.get('voice_mapping', {})
+            if not raw_voice_mapping:
                 return jsonify({"code": 1, "msg": "语音克隆映射为空"}), 400
-            
+
+            # 兼容字符串或结构化映射，整理为统一格式
+            voice_mapping = {}
+            for speaker_name, voice_info in raw_voice_mapping.items():
+                entry = {
+                    'voice_id': None,
+                    'voice_settings': {},
+                    'model_id': None,
+                    'speaking_rate': None
+                }
+
+                if isinstance(voice_info, dict):
+                    entry['voice_id'] = voice_info.get('voice_id') or voice_info.get('id') or voice_info.get('voice')
+                    vs = voice_info.get('voice_settings')
+                    if isinstance(vs, dict):
+                        entry['voice_settings'] = {k: v for k, v in vs.items()}
+                    entry['model_id'] = voice_info.get('model_id') or voice_info.get('model')
+                    if voice_info.get('speaking_rate') is not None:
+                        entry['speaking_rate'] = voice_info.get('speaking_rate')
+                else:
+                    entry['voice_id'] = str(voice_info).strip() if voice_info else None
+
+                if entry['voice_id']:
+                    voice_mapping[speaker_name] = entry
+
             print(f"开始生成音频，共 {len(subtitles)} 条字幕")
             print(f"语音映射: {voice_mapping}")
             
@@ -3585,12 +3734,50 @@ if __name__ == '__main__':
                         print(f"字幕 {i+1} 说话人 '{speaker}' 没有对应的语音克隆，跳过")
                         continue
                     
-                    voice_id = voice_mapping[speaker]
+                    voice_entry = voice_mapping[speaker]
+                    voice_id = voice_entry.get('voice_id')
+                    if not voice_id:
+                        print(f"字幕 {i+1} 说话人 '{speaker}' 未提供 voice_id，跳过")
+                        continue
+
+                    # 基础 voice_settings（克隆映射级别）
+                    speaker_voice_settings = dict(voice_entry.get('voice_settings') or {})
+                    speaker_speaking_rate = voice_entry.get('speaking_rate')
+                    speaker_model_id = voice_entry.get('model_id')
+
+                    # 支持字幕级重写
+                    subtitle_voice_settings = subtitle.get('voice_settings') or subtitle.get('tts_voice_settings') or subtitle.get('elevenlabs_voice_settings')
+                    if isinstance(subtitle_voice_settings, dict):
+                        for key, value in subtitle_voice_settings.items():
+                            if value is None:
+                                speaker_voice_settings.pop(key, None)
+                            else:
+                                speaker_voice_settings[key] = value
+
+                    subtitle_rate = subtitle.get('speaking_rate') or subtitle.get('voice_speaking_rate')
+                    subtitle_model_id = subtitle.get('model_id') or subtitle.get('voice_model_id')
+
+                    speaking_rate = subtitle_rate if subtitle_rate is not None else speaker_speaking_rate
+                    model_id = subtitle_model_id or speaker_model_id
+
                     print(f"为字幕 {i+1} 生成TTS: 说话人={speaker}, voice_id={voice_id}")
-                    
+                    if speaker_voice_settings:
+                        print(f"字幕 {i+1} voice_settings: {speaker_voice_settings}")
+                    if speaking_rate:
+                        print(f"字幕 {i+1} speaking_rate: {speaking_rate}")
+                    if model_id:
+                        print(f"字幕 {i+1} model_id: {model_id}")
+
                     # 生成TTS音频
                     audio_file = audio_dir / f"segment_{i+1:04d}.wav"
-                    success = generate_tts_audio(translated_text, voice_id, audio_file)
+                    success = generate_tts_audio(
+                        translated_text,
+                        voice_id,
+                        audio_file,
+                        speaking_rate=speaking_rate,
+                        voice_settings=speaker_voice_settings,
+                        model_id=model_id
+                    )
                     
                     if success:
                         generated_audio_files.append({
@@ -3599,7 +3786,10 @@ if __name__ == '__main__':
                             "end_time": end_time,
                             "duration": duration,
                             "speaker": speaker,
-                            "text": translated_text
+                            "text": translated_text,
+                            "voice_settings": speaker_voice_settings,
+                            "speaking_rate": speaking_rate,
+                            "model_id": model_id
                         })
                         total_duration = max(total_duration, end_time)
                         print(f"字幕 {i+1} TTS生成成功: {audio_file}")
@@ -3615,7 +3805,12 @@ if __name__ == '__main__':
             
             # 合成完整音频
             final_audio_file = audio_dir / f"{task_id}_final_audio.wav"
-            success = synthesize_final_audio(generated_audio_files, final_audio_file, total_duration, regen_opts={"voice_mapping": voice_mapping})
+            success = synthesize_final_audio(
+                generated_audio_files,
+                final_audio_file,
+                total_duration,
+                regen_opts={"voice_mapping": voice_mapping}
+            )
             
             if not success:
                 return jsonify({"code": 1, "msg": "音频合成失败"}), 500
@@ -4134,8 +4329,24 @@ if __name__ == '__main__':
             pass
         return Path(output_path).exists()
 
-    def generate_tts_audio(text, voice_id, output_file, speaking_rate=None):
-        """使用ElevenLabs生成TTS音频，支持可选语速speaking_rate（倍率）。"""
+    def generate_tts_audio(text, voice_id, output_file, speaking_rate=None, voice_settings=None, model_id=None):
+        """使用ElevenLabs生成TTS音频，可通过 voice_settings 调整语气/情绪。
+
+        Parameters
+        ----------
+        text : str
+            合成文本
+        voice_id : str
+            ElevenLabs voice_id
+        output_file : str | Path
+            输出音频路径
+        speaking_rate : float, optional
+            语速倍率，兼容旧逻辑
+        voice_settings : dict, optional
+            传递给 ElevenLabs 的 voice_settings，支持 stability/style/emotion 等键
+        model_id : str, optional
+            自定义模型ID，默认使用 flash v2.5 或配置项
+        """
         try:
             from elevenlabs import ElevenLabs
             import httpx
@@ -4149,14 +4360,35 @@ if __name__ == '__main__':
             kwargs = {
                 'voice_id': voice_id,
                 'text': text,
-                'model_id': "eleven_flash_v2_5"
+                'model_id': model_id or config.params.get('elevenlabstts_models') or "eleven_flash_v2_5"
             }
-            # 尝试传入语速设置（若SDK/模型不支持则会被忽略或抛错）
+            voice_settings_payload = {}
+
+            # 合并外部 voice_settings
+            if isinstance(voice_settings, dict):
+                for k, v in voice_settings.items():
+                    if v is None:
+                        continue
+                    try:
+                        if k in {'stability', 'similarity_boost', 'style', 'speaking_rate', 'speed'}:
+                            voice_settings_payload[k] = float(v)
+                        elif k == 'use_speaker_boost':
+                            voice_settings_payload[k] = bool(v)
+                        else:
+                            voice_settings_payload[k] = v
+                    except (TypeError, ValueError):
+                        voice_settings_payload[k] = v
+
+            # 兼容旧语速参数（若外部未提供speaking_rate/speed）
             if speaking_rate and speaking_rate > 0:
-                try:
-                    kwargs['voice_settings'] = {"speaking_rate": float(speaking_rate)}
-                except Exception:
-                    pass
+                if 'speaking_rate' not in voice_settings_payload and 'speed' not in voice_settings_payload:
+                    try:
+                        voice_settings_payload['speaking_rate'] = float(speaking_rate)
+                    except Exception:
+                        pass
+
+            if voice_settings_payload:
+                kwargs['voice_settings'] = voice_settings_payload
             
             # 生成TTS音频
             audio = client.text_to_speech.convert(**kwargs)
@@ -4364,12 +4596,56 @@ if __name__ == '__main__':
                     # 超过±20%，优先尝试通过 ElevenLabs 以不同语速重生成
                     speaker = segment.get('speaker')
                     text = segment.get('text', '')
-                    voice_id = voice_mapping.get(speaker)
+                    voice_entry = voice_mapping.get(speaker)
+
+                    voice_id = None
+                    voice_settings = {}
+                    model_id = None
+                    base_rate = None
+
+                    if isinstance(voice_entry, dict):
+                        voice_id = voice_entry.get('voice_id') or voice_entry.get('id') or voice_entry.get('voice')
+                        voice_settings = dict(voice_entry.get('voice_settings') or {})
+                        model_id = voice_entry.get('model_id') or voice_entry.get('model')
+                        base_rate = voice_entry.get('speaking_rate')
+                    elif voice_entry:
+                        voice_id = voice_entry
+
+                    segment_voice_settings = segment.get('voice_settings')
+                    if isinstance(segment_voice_settings, dict):
+                        for key, value in segment_voice_settings.items():
+                            if value is None:
+                                voice_settings.pop(key, None)
+                            else:
+                                voice_settings[key] = value
+
+                    if segment.get('model_id'):
+                        model_id = segment.get('model_id')
+
+                    segment_rate = segment.get('speaking_rate')
+                    if segment_rate is not None:
+                        base_rate = segment_rate
+
                     if voice_id and text:
-                        speaking_rate = max(0.5, min(2.0, (tgt_sec / orig_sec) if orig_sec > 0 else 1.0))
+                        speaking_rate = max(0.5, min(2.0, (tgt_sec / orig_sec) if orig_sec > 0 else (base_rate or 1.0)))
+                        # 重生成时优先使用新的语速，移除旧的speaking_rate/speed键
+                        voice_settings.pop('speaking_rate', None)
+                        voice_settings.pop('speed', None)
+
                         regen_file = Path(audio_file).parent / f"regen_{Path(audio_file).name}"
                         print(f"超出20%，尝试以语速 {speaking_rate:.3f} 重生成 ElevenLabs 片段...")
-                        ok = generate_tts_audio(text, voice_id, regen_file, speaking_rate=speaking_rate)
+                        if voice_settings:
+                            print(f"重生成使用 voice_settings: {voice_settings}")
+                        if model_id:
+                            print(f"重生成使用 model_id: {model_id}")
+                        ok = generate_tts_audio(
+                            text,
+                            voice_id,
+                            regen_file,
+                            speaking_rate=speaking_rate,
+                            voice_settings=voice_settings,
+                            model_id=model_id
+                        )
                         if ok and regen_file.exists():
                             new_ratio = (_get_dur_sec(regen_file) / tgt_sec) if tgt_sec > 0 else 1.0
                             print(f"重生成结果时长比: {new_ratio:.3f}")
