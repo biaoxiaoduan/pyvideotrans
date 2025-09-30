@@ -1,6 +1,7 @@
 if __name__ == '__main__':
     print('API ...')
     import json
+    import html
     import multiprocessing
     import random
     import re
@@ -47,6 +48,40 @@ if __name__ == '__main__':
     if Path(PROCESS_INFO).is_dir():
         shutil.rmtree(PROCESS_INFO)
     Path(PROCESS_INFO).mkdir(parents=True, exist_ok=True)
+
+    PROJECT_MAP_FILE = Path(TARGET_DIR) / 'funasr_projects.json'
+
+    def _load_project_mapping():
+        if not PROJECT_MAP_FILE.exists():
+            return {}
+        try:
+            raw = PROJECT_MAP_FILE.read_text(encoding='utf-8')
+            if not raw.strip():
+                return {}
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {}
+
+    def _save_project_mapping(mapping):
+        if not isinstance(mapping, dict):
+            raise ValueError('mapping must be dict')
+        PROJECT_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = PROJECT_MAP_FILE.with_suffix('.tmp')
+        tmp_path.write_text(json.dumps(mapping, indent=2), encoding='utf-8')
+        tmp_path.replace(PROJECT_MAP_FILE)
+
+    def _get_project_name_from_mapping(task_id, mapping):
+        if not isinstance(mapping, dict):
+            return ''
+        entry = mapping.get(task_id)
+        if isinstance(entry, dict):
+            return entry.get('name') or ''
+        if isinstance(entry, str):
+            return entry
+        return ''
     # url前缀
     URL_PREFIX = f"http://{HOST}:{PORT}/{API_RESOURCE}"
     config.exit_soft = False
@@ -129,6 +164,8 @@ if __name__ == '__main__':
                 .progress-wrap { height: 10px; background: #eee; border-radius: 999px; overflow: hidden; }
                 .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #4e8cff, #9c27b0); transition: width .15s ease; }
                 .progress-text { margin-top: 8px; font-size: 12px; color: #555; text-align: right; }
+                .task-name { font-size: 12px; color: #333; padding: 4px 6px; border: 1px solid transparent; border-radius: 4px; transition: border-color .2s ease, background .2s ease; min-height: 24px; display: flex; align-items: center; }
+                .task-name:focus { outline: none; border-color: #007aff; background: #f0f8ff; }
             </style>
         </head>
         <body>
@@ -149,8 +186,9 @@ if __name__ == '__main__':
                       <button id=\"btnRefreshTasks\" type=\"button\" style=\"padding:6px 10px;font-size:12px;\">刷新</button>
                     </div>
                   </div>
-                  <div class=\"task-head\" style=\"display:grid;grid-template-columns:1fr 180px 120px;gap:12px;align-items:center;padding:8px 12px;background:#fafafa;border:1px solid #eee;border-bottom:none;border-radius:8px 8px 0 0;\">
-                    <div style=\"font-weight:600;font-size:12px;color:#333;\">task_id</div>
+                  <div class=\"task-head\" style=\"display:grid;grid-template-columns:1.6fr 1.2fr 160px 120px;gap:12px;align-items:center;padding:8px 12px;background:#fafafa;border:1px solid #eee;border-bottom:none;border-radius:8px 8px 0 0;\">
+                    <div style=\"font-weight:600;font-size:12px;color:#333;\">项目名称</div>
+                    <div style=\"font-weight:600;font-size:12px;color:#333;\">目录</div>
                     <div style=\"font-weight:600;font-size:12px;color:#333;\">时间</div>
                     <div style=\"font-weight:600;font-size:12px;color:#333;\">操作</div>
                   </div>
@@ -175,6 +213,66 @@ if __name__ == '__main__':
                 const text = document.getElementById('progressText');
                 const taskList = document.getElementById('taskList');
                 const btnRefreshTasks = document.getElementById('btnRefreshTasks');
+                async function saveProjectName(taskId, projectName){
+                    const res = await fetch('/funasr_project_name', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ task_id: taskId, project_name: projectName })
+                    }).catch(() => null);
+                    if (!res) {
+                        throw new Error('网络异常, 请稍后重试');
+                    }
+                    let payload = {};
+                    try { payload = await res.json(); } catch (_) {}
+                    if (!res.ok) {
+                        const message = (payload && payload.msg) || res.statusText || '保存失败';
+                        throw new Error(message);
+                    }
+                    if (!payload || payload.code !== 0) {
+                        throw new Error((payload && payload.msg) || '保存失败');
+                    }
+                    return (payload && payload.data) || {};
+                }
+                function attachTaskNameHandlers(){
+                    if (!taskList) return;
+                    const editable = taskList.querySelectorAll('.task-name[contenteditable]');
+                    editable.forEach(function(el){
+                        if (el.dataset.bound === '1') return;
+                        el.dataset.bound = '1';
+                        el.addEventListener('focus', function(){
+                            const current = (this.textContent || '').trim();
+                            this.dataset.originalValue = current;
+                        });
+                        el.addEventListener('keydown', function(ev){
+                            if (ev.key === 'Enter') {
+                                ev.preventDefault();
+                                this.blur();
+                            }
+                        });
+                        el.addEventListener('blur', async function(){
+                            const taskId = this.getAttribute('data-task-id') || '';
+                            if (!taskId) return;
+                            const fallback = taskId;
+                            const newValue = (this.textContent || '').trim();
+                            const original = this.dataset.originalValue !== undefined ? this.dataset.originalValue : fallback;
+                            if (newValue === original) {
+                                this.textContent = newValue || fallback;
+                                return;
+                            }
+                            try {
+                                const result = await saveProjectName(taskId, newValue);
+                                const updated = (result && result.project_name) ? result.project_name : (newValue || fallback);
+                                this.textContent = updated || fallback;
+                                this.dataset.originalValue = updated || fallback;
+                            } catch (err) {
+                                alert(err && err.message ? err.message : '保存失败');
+                                const reset = original || fallback;
+                                this.textContent = reset;
+                                this.dataset.originalValue = reset;
+                            }
+                        });
+                    });
+                }
                 function showOverlay(p){ overlay.style.display='flex'; if (typeof p==='number'){ bar.style.width=p+'%'; text.textContent=p.toFixed(0)+'%'; } }
                 function hideOverlay(){ overlay.style.display='none'; bar.style.width='0%'; text.textContent='0%'; }
                 async function loadTasks(){
@@ -182,9 +280,11 @@ if __name__ == '__main__':
                         const res = await fetch('/funasr_tasks', { headers: { 'Accept': 'text/html' } });
                         const html = await res.text();
                         taskList.innerHTML = html && html.trim() ? html : '<li class="task-item" style="display:flex;gap:12px;align-items:center;padding:10px 12px;"><span class="task-meta" style="font-size:12px;color:#666;">暂无任务</span></li>';
+                        attachTaskNameHandlers();
                         if (taskList.lastElementChild) taskList.lastElementChild.style.borderBottom='none';
                     }catch(e){
                         taskList.innerHTML = '<li class="task-item" style="display:flex;gap:12px;align-items:center;padding:10px 12px;"><span class="task-meta" style="font-size:12px;color:#666;">任务列表加载失败</span></li>';
+                        attachTaskNameHandlers();
                         console.error(e);
                     }
                 }
@@ -396,13 +496,27 @@ if __name__ == '__main__':
                         mtime = 0
                     items.append((d.name, mtime))
             items.sort(key=lambda x: x[1], reverse=True)
+            project_mapping = _load_project_mapping()
+
             # 生成 li 片段
             lines = []
             for name, mtime in items:
                 mtxt = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S') if mtime else ''
+                project_name = _get_project_name_from_mapping(name, project_mapping)
+                if project_name:
+                    display_name = project_name.strip()
+                else:
+                    display_name = ''
+                if not display_name:
+                    display_name = name
+                task_id_attr = html.escape(name, quote=True)
+                display_name_html = html.escape(display_name)
+                dir_value = f"{API_RESOURCE}/{name}"
+                dir_html = html.escape(dir_value)
                 lines.append(
-                    f"<li class='task-item' style='display:grid;grid-template-columns:1fr 180px 120px;gap:12px;align-items:center;padding:10px 12px;border-bottom:1px solid #f0f0f0;'>"
-                    f"<div class='task-id' style='font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#333;'>{name}</div>"
+                    f"<li class='task-item' style='display:grid;grid-template-columns:1.6fr 1.2fr 160px 120px;gap:12px;align-items:center;padding:10px 12px;border-bottom:1px solid #f0f0f0;'>"
+                    f"<div class='task-name' contenteditable='true' spellcheck='false' data-task-id='{task_id_attr}'>{display_name_html}</div>"
+                    f"<div class='task-id' style='font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#333;'>{dir_html}</div>"
                     f"<div class='task-time' style='font-size:12px;color:#666;'>{mtxt}</div>"
                     f"<div class='task-actions'><button type='button' onclick=\"location.href='/view/{name}'\" style='padding:4px 8px;font-size:12px;border:1px solid #007aff;background:#fff;color:#007aff;border-radius:4px;cursor:pointer;'>打开</button></div>"
                     f"</li>"
@@ -410,6 +524,58 @@ if __name__ == '__main__':
             return "\n".join(lines)
         except Exception as e:
             return f"<li class='task-item' style='display:flex;gap:12px;align-items:center;padding:10px 12px;'><span class='task-meta' style='font-size:12px;color:#666;'>加载失败: {str(e)}</span></li>", 500
+
+    @app.route('/funasr_project_name', methods=['POST'])
+    def funasr_project_name():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            payload = request.form.to_dict() if request.form else {}
+
+        task_id = str(payload.get('task_id') or '').strip()
+        project_name = str(payload.get('project_name') or '').strip()
+
+        if not task_id:
+            return jsonify({"code": 1, "msg": "缺少任务ID"}), 400
+
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务目录不存在"}), 404
+
+        if project_name:
+            project_name = re.sub(r'[\r\n\t]+', ' ', project_name).strip()
+            if len(project_name) > 120:
+                project_name = project_name[:120].rstrip()
+
+        try:
+            mapping = _load_project_mapping()
+            if not isinstance(mapping, dict):
+                mapping = {}
+        except Exception:
+            mapping = {}
+
+        effective_name = project_name or task_id
+
+        if project_name:
+            mapping[task_id] = {
+                "name": project_name,
+                "path": f"{API_RESOURCE}/{task_id}"
+            }
+        else:
+            mapping.pop(task_id, None)
+
+        try:
+            _save_project_mapping(mapping)
+        except Exception as exc:
+            return jsonify({"code": 1, "msg": f"保存失败: {exc}"}), 500
+
+        return jsonify({
+            "code": 0,
+            "msg": "ok",
+            "data": {
+                "task_id": task_id,
+                "project_name": effective_name
+            }
+        })
 
     @app.route('/upload_viewer', methods=['POST'])
     def upload_viewer():
@@ -1833,8 +1999,12 @@ if __name__ == '__main__':
                     showSynthModal('准备生成配音音频...');
 
                     // 先生成音频（合并原“生成音频”步骤）
-                    // 检查翻译
-                    const hasTranslation = cues.some(c => (c.translated_text && c.translated_text.trim()) || (c.translation && c.translation.trim()));
+                    // 检查翻译 - 修复逻辑：检查多种可能的翻译字段
+                    const hasTranslation = cues.some(c => {
+                        // 检查各种可能的翻译字段
+                        const translatedText = c.translated_text || c.translation || c.translated_text_en || c.translated_text_es || c.translated_text_fr || c.translated_text_ja || c.translated_text_zh || c.translated_text_pt || c.translated_text_th;
+                        return translatedText && translatedText.trim();
+                    });
                     if (!hasTranslation) {
                         hideSynthModal();
                         alert('请先翻译字幕');
@@ -1857,7 +2027,7 @@ if __name__ == '__main__':
                             endraw: c.endraw || '',
                             time: `${c.startraw || ''} --> ${c.endraw || ''}`,
                             text: String(c.text || '').trim(),
-                            translated_text: String((c.translated_text || c.translation || '')).trim(),
+                            translated_text: String((c.translated_text || c.translation || c.translated_text_en || c.translated_text_es || c.translated_text_fr || c.translated_text_ja || c.translated_text_zh || c.translated_text_pt || c.translated_text_th || '')).trim(),
                             speaker: String(c.speaker || '').trim(),
                         }))
                     };
