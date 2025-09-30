@@ -603,6 +603,21 @@ if __name__ == '__main__':
         video.save(video_path)
         srt.save(srt_path)
 
+        # 设置默认任务别名（基于视频文件名）
+        try:
+            project_name = Path(video.filename).stem
+            if project_name:
+                mapping = _load_project_mapping()
+                if not isinstance(mapping, dict):
+                    mapping = {}
+                mapping[task_id] = {
+                    "name": project_name,
+                    "path": f"{API_RESOURCE}/{task_id}"
+                }
+                _save_project_mapping(mapping)
+        except Exception as e:
+            print(f"设置默认任务别名失败: {e}")
+
         return redirect(url_for('viewer_page', task_id=task_id))
 
     @app.route('/view/<task_id>', methods=['GET'])
@@ -807,6 +822,7 @@ if __name__ == '__main__':
                     <div class=\"list-tools\" style=\"display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;\">
                         <div style=\"font-size:12px; color:#666;\">字幕列表</div>
                         <div>
+                            <button id=\"btnEditSpeaker\" style=\"padding:4px 8px; font-size:12px; border:1px solid #666; background:#fff; border-radius:6px; cursor:pointer; margin-right: 4px;\">编辑说话人</button>
                             <button id=\"btnAddSpeakerOption\" style=\"padding:4px 8px; font-size:12px; border:1px solid #666; background:#fff; border-radius:6px; cursor:pointer;\">增加说话人选项</button>
                         </div>
                     </div>
@@ -858,6 +874,7 @@ if __name__ == '__main__':
             const btnSynthesizeAudio = document.getElementById('btnSynthesizeAudio');
             const btnSynthesizeVideo = document.getElementById('btnSynthesizeVideo');
             const btnAddSubtitles = document.getElementById('btnAddSubtitles');
+            const btnEditSpeaker = document.getElementById('btnEditSpeaker');
             const btnAddSpeakerOption = document.getElementById('btnAddSpeakerOption');
             const dragHint = document.getElementById('dragHint');
             const zoomLevelEl = document.getElementById('zoomLevel');
@@ -1325,6 +1342,140 @@ if __name__ == '__main__':
                 return `spk${next}`;
             }
 
+            // 编辑说话人映射
+            if (btnEditSpeaker) {
+                btnEditSpeaker.addEventListener('click', () => {
+                    // 收集所有出现过的说话人
+                    const allSpeakers = [...new Set(cues.map(c => c.speaker).filter(s => s && s.trim()))];
+                    
+                    if (allSpeakers.length === 0) {
+                        alert('没有检测到说话人');
+                        return;
+                    }
+                    
+                    // 创建对话框
+                    const modal = document.createElement('div');
+                    modal.style.cssText = `
+                        position: fixed;
+                        top: 0;
+                        left: 0;
+                        width: 100%;
+                        height: 100%;
+                        background: rgba(0,0,0,0.5);
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        z-index: 10000;
+                    `;
+                    
+                    const modalContent = document.createElement('div');
+                    modalContent.style.cssText = `
+                        background: white;
+                        padding: 20px;
+                        border-radius: 8px;
+                        min-width: 400px;
+                        max-width: 600px;
+                        max-height: 80vh;
+                        overflow-y: auto;
+                    `;
+                    
+                    modalContent.innerHTML = `
+                        <h3 style="margin-top: 0;">编辑说话人名称</h3>
+                        <div id="speakerMappingForm"></div>
+                        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+                            <button id="cancelSpeakerEdit" style="padding: 8px 16px;">取消</button>
+                            <button id="saveSpeakerEdit" style="padding: 8px 16px; background: #007AFF; color: white; border: none; border-radius: 4px;">保存</button>
+                        </div>
+                    `;
+                    
+                    const formContainer = modalContent.querySelector('#speakerMappingForm');
+                    
+                    // 为每个说话人创建输入框
+                    allSpeakers.forEach(speaker => {
+                        const row = document.createElement('div');
+                        row.style.cssText = 'display: flex; align-items: center; margin-bottom: 12px;';
+                        
+                        const label = document.createElement('label');
+                        label.style.cssText = 'min-width: 100px; margin-right: 10px;';
+                        label.textContent = speaker;
+                        
+                        const input = document.createElement('input');
+                        input.type = 'text';
+                        input.value = speaker;
+                        input.style.cssText = 'flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 4px;';
+                        input.dataset.original = speaker;
+                        
+                        row.appendChild(label);
+                        row.appendChild(input);
+                        formContainer.appendChild(row);
+                    });
+                    
+                    modal.appendChild(modalContent);
+                    document.body.appendChild(modal);
+                    
+                    // 绑定事件
+                    modal.querySelector('#cancelSpeakerEdit').addEventListener('click', () => {
+                        document.body.removeChild(modal);
+                    });
+                    
+                    modal.querySelector('#saveSpeakerEdit').addEventListener('click', async () => {
+                        const inputs = formContainer.querySelectorAll('input');
+                        const speakerMapping = {};
+                        
+                        // 收集映射关系
+                        inputs.forEach(input => {
+                            const original = input.dataset.original;
+                            const newName = input.value.trim();
+                            if (newName && newName !== original) {
+                                speakerMapping[original] = newName;
+                            }
+                        });
+                        
+                        if (Object.keys(speakerMapping).length === 0) {
+                            document.body.removeChild(modal);
+                            return;
+                        }
+                        
+                        try {
+                            // 发送到后端更新SRT文件
+                            const response = await fetch(`/viewer_api/${taskId}/rename_speakers`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({ speaker_mapping: speakerMapping })
+                            });
+                            
+                            const result = await response.json();
+                            
+                            if (result.code === 0) {
+                                // 更新当前界面显示
+                                cues.forEach(cue => {
+                                    if (cue.speaker && speakerMapping[cue.speaker]) {
+                                        cue.speaker = speakerMapping[cue.speaker];
+                                    }
+                                });
+                                
+                                // 更新speakers数组
+                                speakers = [...new Set(cues.map(c => c.speaker).filter(s => s && s.trim()))];
+                                
+                                // 重新渲染界面
+                                renderList();
+                                drawTimeline(videoEl.currentTime * 1000);
+                                
+                                document.body.removeChild(modal);
+                                alert('说话人名称已更新');
+                            } else {
+                                alert('更新失败: ' + (result.msg || '未知错误'));
+                            }
+                        } catch (error) {
+                            console.error('更新说话人失败:', error);
+                            alert('更新失败，请查看控制台了解详情');
+                        }
+                    });
+                });
+            }
+
             // 增加一个可选说话人 [spkN]
             if (btnAddSpeakerOption) {
                 btnAddSpeakerOption.addEventListener('click', () => {
@@ -1332,6 +1483,9 @@ if __name__ == '__main__':
                     if (!speakers.includes(newName)) speakers.push(newName);
                     renderList();
                     drawTimeline(videoEl.currentTime * 1000);
+                    
+                    // 显示确认对话框
+                    alert(`已增加说话人 ${newName}`);
                 });
             }
 
@@ -1437,6 +1591,12 @@ if __name__ == '__main__':
                             updateSaveStatus('已保存', '#28a745');
                             console.log('字幕已保存');
                         }
+                        
+                    // 从 speakers 数组中移除未在字幕中出现的说话人选项
+                    const usedSpeakers = new Set(cues.map(c => c.speaker).filter(s => s && s.trim()));
+                    speakers = speakers.filter(speaker => usedSpeakers.has(speaker) || !speaker.trim());
+                    renderList();
+                        
                         return true;
                     } else {
                         if (showStatus) {
@@ -2481,9 +2641,12 @@ if __name__ == '__main__':
                           </table>
                         </div>
                         <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:10px;">
+                          <button id="btnVoiceImport" style="padding:6px 10px; background:#4CAF50; color:#fff; border:none; border-radius:6px;">导入配置</button>
+                          <button id="btnVoiceExport" style="padding:6px 10px; background:#2196F3; color:#fff; border:none; border-radius:6px;">导出配置</button>
                           <button id="btnVoiceCancel" style="padding:6px 10px;">取消</button>
                           <button id="btnVoiceSave" style="padding:6px 10px; background:#673ab7; color:#fff; border:none; border-radius:6px;">保存映射</button>
                         </div>
+                        <input type="file" id="voiceConfigFile" accept=".json" style="display:none;">
                       </div>`;
                     document.body.appendChild(dlg);
 
@@ -2558,6 +2721,112 @@ if __name__ == '__main__':
                         try { audioEl.pause(); } catch(e){}
                         document.body.removeChild(dlg);
                     });
+                    // 导出配置功能
+                    dlg.querySelector('#btnVoiceExport').addEventListener('click', () => {
+                        // 收集当前映射数据
+                        const mapping = {};
+                        Object.keys(currentMapping).forEach(spk => {
+                            const refs = currentMapping[spk];
+                            if (!refs || !refs.voiceSelect) return;
+                            const voiceId = refs.voiceSelect.value;
+                            if (!voiceId) return;
+                            const entry = { voice_id: voiceId };
+                            if (refs.modelSelect && refs.modelSelect.value) {
+                                entry.model_id = refs.modelSelect.value;
+                            }
+                            const original = refs.original;
+                            if (original && typeof original === 'object') {
+                                if (original.voice_settings) {
+                                    entry.voice_settings = original.voice_settings;
+                                }
+                                if (original.speaking_rate !== undefined && original.speaking_rate !== null) {
+                                    entry.speaking_rate = original.speaking_rate;
+                                }
+                            }
+                            mapping[spk] = entry;
+                        });
+
+                        if (Object.keys(mapping).length === 0) {
+                            alert('没有可导出的配置数据');
+                            return;
+                        }
+
+                        // 创建JSON数据
+                        const exportData = {
+                            voice_mapping: mapping,
+                            exported_at: new Date().toISOString(),
+                            task_id: taskId
+                        };
+
+                        // 创建下载链接
+                        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
+                        const downloadAnchorNode = document.createElement('a');
+                        downloadAnchorNode.setAttribute("href", dataStr);
+                        downloadAnchorNode.setAttribute("download", `voice_mapping_${taskId}.json`);
+                        document.body.appendChild(downloadAnchorNode);
+                        downloadAnchorNode.click();
+                        downloadAnchorNode.remove();
+                    });
+
+                    // 导入配置功能
+                    dlg.querySelector('#btnVoiceImport').addEventListener('click', () => {
+                        // 创建文件选择输入框
+                        const fileInput = document.getElementById('voiceConfigFile') || document.createElement('input');
+                        fileInput.type = 'file';
+                        fileInput.accept = '.json';
+                        fileInput.style.display = 'none';
+                        fileInput.id = 'voiceConfigFile';
+                        
+                        fileInput.onchange = async (event) => {
+                            const files = event.target.files;
+                            if (files.length === 0) return;
+                            
+                            const file = files[0];
+                            const reader = new FileReader();
+                            
+                            reader.onload = async (e) => {
+                                try {
+                                    const jsonData = JSON.parse(e.target.result);
+                                    const importedMapping = jsonData.voice_mapping;
+                                    
+                                    if (!importedMapping || typeof importedMapping !== 'object') {
+                                        alert('无效的配置文件格式');
+                                        return;
+                                    }
+                                    
+                                    // 更新界面中的选择框
+                                    Object.keys(importedMapping).forEach(spk => {
+                                        if (currentMapping[spk]) {
+                                            const refs = currentMapping[spk];
+                                            const mappingEntry = importedMapping[spk];
+                                            
+                                            // 设置音色选择
+                                            if (mappingEntry.voice_id && refs.voiceSelect) {
+                                                refs.voiceSelect.value = mappingEntry.voice_id;
+                                            }
+                                            
+                                            // 设置模型选择
+                                            if (mappingEntry.model_id && refs.modelSelect) {
+                                                refs.modelSelect.value = mappingEntry.model_id;
+                                            }
+                                        }
+                                    });
+                                    
+                                    alert('配置导入成功');
+                                } catch (err) {
+                                    console.error('导入配置失败:', err);
+                                    alert('导入配置失败: ' + (err.message || '无效的JSON文件'));
+                                }
+                            };
+                            
+                            reader.readAsText(file);
+                        };
+                        
+                        document.body.appendChild(fileInput);
+                        fileInput.click();
+                        document.body.removeChild(fileInput);
+                    });
+
                     dlg.querySelector('#btnVoiceSave').addEventListener('click', async () => {
                         const mapping = {};
                         Object.keys(currentMapping).forEach(spk => {
@@ -4306,6 +4575,104 @@ if __name__ == '__main__':
             import traceback
             traceback.print_exc()
             return jsonify({"code": 1, "msg": f"添加字幕失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/rename_speakers', methods=['POST'])
+    def viewer_rename_speakers(task_id):
+        """重命名说话人并更新所有SRT文件和语音映射文件"""
+        try:
+            # 获取重命名映射
+            data = request.get_json(silent=True) or {}
+            speaker_mapping = data.get('speaker_mapping', {})
+            
+            if not isinstance(speaker_mapping, dict) or not speaker_mapping:
+                return jsonify({"code": 1, "msg": "缺少说话人映射数据"}), 400
+            
+            # 检查任务目录
+            task_dir = Path(TARGET_DIR) / task_id
+            if not task_dir.exists():
+                return jsonify({"code": 1, "msg": "任务不存在"}), 404
+            
+            # 查找所有SRT文件
+            srt_files = list(task_dir.glob("*.srt"))
+            if not srt_files:
+                return jsonify({"code": 1, "msg": "未找到SRT文件"}), 404
+            
+            # 处理每个SRT文件
+            updated_files = []
+            for srt_file in srt_files:
+                try:
+                    # 读取SRT文件内容
+                    content = srt_file.read_text(encoding='utf-8')
+                    
+                    # 应用说话人重命名
+                    updated_content = content
+                    for old_name, new_name in speaker_mapping.items():
+                        # 使用正则表达式匹配 [说话人] 格式
+                        pattern = r'\[' + re.escape(old_name) + r'\]'
+                        replacement = f'[{new_name}]'
+                        updated_content = re.sub(pattern, replacement, updated_content)
+                    
+                    # 如果内容有变化，保存更新后的文件
+                    if updated_content != content:
+                        srt_file.write_text(updated_content, encoding='utf-8')
+                        updated_files.append(srt_file.name)
+                
+                except Exception as e:
+                    print(f"处理文件 {srt_file.name} 时出错: {str(e)}")
+                    continue
+            
+            # 查找并更新语音映射JSON文件
+            voice_mapping_files = list(task_dir.glob("*_voice_mapping.json"))
+            for mapping_file in voice_mapping_files:
+                try:
+                    # 读取JSON文件
+                    mapping_content = mapping_file.read_text(encoding='utf-8')
+                    mapping_data = json.loads(mapping_content)
+                    
+                    # 更新映射数据中的说话人名称
+                    updated_mapping = False
+                    
+                    # 更新voice_mapping中的键
+                    if 'voice_mapping' in mapping_data and isinstance(mapping_data['voice_mapping'], dict):
+                        new_voice_mapping = {}
+                        for speaker, voice_info in mapping_data['voice_mapping'].items():
+                            # 如果说话人名称在映射中，使用新名称
+                            new_speaker_name = speaker_mapping.get(speaker, speaker)
+                            new_voice_mapping[new_speaker_name] = voice_info
+                            if new_speaker_name != speaker:
+                                updated_mapping = True
+                        mapping_data['voice_mapping'] = new_voice_mapping
+                    
+                    # 更新voice_clones中的说话人名称
+                    if 'voice_clones' in mapping_data and isinstance(mapping_data['voice_clones'], list):
+                        for clone_info in mapping_data['voice_clones']:
+                            if isinstance(clone_info, dict) and 'speaker' in clone_info:
+                                original_speaker = clone_info['speaker']
+                                if original_speaker in speaker_mapping:
+                                    clone_info['speaker'] = speaker_mapping[original_speaker]
+                                    updated_mapping = True
+                    
+                    # 如果有更新，保存文件
+                    if updated_mapping:
+                        mapping_file.write_text(json.dumps(mapping_data, ensure_ascii=False, indent=2), encoding='utf-8')
+                        updated_files.append(mapping_file.name)
+                        
+                except Exception as e:
+                    print(f"处理语音映射文件 {mapping_file.name} 时出错: {str(e)}")
+                    continue
+            
+            return jsonify({
+                "code": 0,
+                "msg": "说话人重命名成功",
+                "updated_files": updated_files,
+                "mapping": speaker_mapping
+            })
+            
+        except Exception as e:
+            print(f"重命名说话人失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({"code": 1, "msg": f"重命名失败: {str(e)}"}), 500
 
     @app.route('/viewer_api/<task_id>/list_subtitle_files', methods=['GET'])
     def viewer_list_subtitle_files(task_id):
