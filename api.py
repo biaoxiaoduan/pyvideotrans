@@ -1058,6 +1058,22 @@ if __name__ == '__main__':
             }
 
             function renderList() {
+                // 记录当前聚焦的输入框及光标位置，避免重渲染后丢失
+                let focusInfo = null;
+                const active = document.activeElement;
+                if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
+                    const container = active.closest('.item');
+                    if (container && container.dataset && container.dataset.idx !== undefined) {
+                        focusInfo = {
+                            idx: Number(container.dataset.idx),
+                            isTranslated: active.previousSibling && active.previousSibling.textContent && active.previousSibling.textContent.includes('翻译'),
+                            selectionStart: active.selectionStart,
+                            selectionEnd: active.selectionEnd,
+                            scrollTop: active.scrollTop
+                        };
+                    }
+                }
+
                 listEl.innerHTML = '';
                 cues.forEach((c, idx) => {
                     const item = document.createElement('div');
@@ -1181,6 +1197,23 @@ if __name__ == '__main__':
                     translatedWrapper.appendChild(translatedLabel);
                     translatedWrapper.appendChild(translatedInput);
                     tx.appendChild(translatedWrapper);
+
+                    // 如果此前有焦点记录，尝试恢复到对应行对应输入框
+                    if (focusInfo && focusInfo.idx === idx) {
+                        const target = focusInfo.isTranslated ? translatedInput : content;
+                        // 使用微任务确保元素插入后再聚焦
+                        queueMicrotask(() => {
+                            try {
+                                target.focus();
+                                if (typeof focusInfo.selectionStart === 'number' && typeof focusInfo.selectionEnd === 'number') {
+                                    target.setSelectionRange(focusInfo.selectionStart, focusInfo.selectionEnd);
+                                }
+                                if (typeof focusInfo.scrollTop === 'number') {
+                                    target.scrollTop = focusInfo.scrollTop;
+                                }
+                            } catch (e) { /* 忽略 */ }
+                        });
+                    }
                     
                     item.appendChild(t); item.appendChild(tx);
                     item.addEventListener('click', () => {
