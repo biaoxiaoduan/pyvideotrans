@@ -2308,7 +2308,8 @@ if __name__ == '__main__':
                         { code: 'zh-cn', name: '汉语' },
                         { code: 'es', name: '西班牙语' },
                         { code: 'pt', name: '葡萄牙语' },
-                        { code: 'th', name: '泰语' }
+                        { code: 'th', name: '泰语' },
+                        { code: 'ru', name: '俄语' }
                     ];
                     
                     // 创建对话框HTML
