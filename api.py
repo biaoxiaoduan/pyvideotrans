@@ -5154,7 +5154,8 @@ if __name__ == '__main__':
                 print(f"片段 {i+1} 原始={orig_sec:.3f}s 目标={tgt_sec:.3f}s 比例={ratio:.3f}")
 
                 adjusted_path = Path(audio_file)
-                need_regen = (ratio < 0.8 or ratio > 1.2) and bool(voice_mapping) and ('text' in segment) and ('speaker' in segment) and segment.get('speaker') in voice_mapping
+                # 将阈值从±20%放宽到±80%（ratio 超出 0.2～1.8 时触发重生成）
+                need_regen = (ratio < 0.2 or ratio > 1.8) and bool(voice_mapping) and ('text' in segment) and ('speaker' in segment) and segment.get('speaker') in voice_mapping
 
                 # 裁剪/变速并在片段阶段提升响度
                 # 片段级音量增益（可在 videotrans/cfg.json 中通过 settings.audio_volume_boost 调整）
@@ -5204,7 +5205,7 @@ if __name__ == '__main__':
                         voice_settings.pop('speed', None)
 
                         regen_file = Path(audio_file).parent / f"regen_{Path(audio_file).name}"
-                        print(f"超出20%，尝试以语速 {speaking_rate:.3f} 重生成 ElevenLabs 片段...")
+                        print(f"超出80%，尝试以语速 {speaking_rate:.3f} 重生成 ElevenLabs 片段...")
                         if voice_settings:
                             print(f"重生成使用 voice_settings: {voice_settings}")
                         if model_id:
