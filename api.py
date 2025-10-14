@@ -5009,7 +5009,8 @@ if __name__ == '__main__':
             # 这里改为使用多段 atempo 级联，支持任意倍率（每段保持 0.5~2.0 范围）。
             raw_ratio = original_duration / target_duration if target_duration > 0 else 1.0
             # 不再强行夹取 ±20%，而是用级联 atempo 组合逼近目标倍率
-            speed_ratio = max(0.1, min(10.0, raw_ratio))
+            # 如果原语音比目标长度短，就不用处理
+            speed_ratio = max(1, min(10.0, raw_ratio))
 
             # 构建 atempo 级联链，保证每段处于 [0.5, 2.0]
             def build_atempo_chain(ratio: float) -> str:
