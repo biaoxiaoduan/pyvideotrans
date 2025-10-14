@@ -5157,11 +5157,15 @@ if __name__ == '__main__':
                 # 将阈值从±20%放宽到±80%（ratio 超出 0.2～1.8 时触发重生成）
                 need_regen = (ratio < 0.2 or ratio > 1.8) and bool(voice_mapping) and ('text' in segment) and ('speaker' in segment) and segment.get('speaker') in voice_mapping
 
-                # 裁剪/变速；取消片段阶段的音量增强处理
-                seg_vol_boost = 0.0
+                # 裁剪/变速并在片段阶段提升响度
+                # 片段级音量增益（可在 videotrans/cfg.json 中通过 settings.audio_volume_boost 调整）
+                try:
+                    seg_vol_boost = float(config.settings.get('audio_volume_boost', 3.2))
+                except Exception:
+                    seg_vol_boost = 3.2
 
                 if need_regen:
-                    # 超出阈值，优先尝试通过 ElevenLabs 以不同语速重生成（只做加速，不做减速）
+                    # 超过±20%，优先尝试通过 ElevenLabs 以不同语速重生成
                     speaker = segment.get('speaker')
                     text = segment.get('text', '')
                     voice_entry = voice_mapping.get(speaker)
@@ -5195,56 +5199,37 @@ if __name__ == '__main__':
                         base_rate = segment_rate
 
                     if voice_id and text:
-                        # 只加速：仅当目标更短时(orig_sec > tgt_sec)才设定加速语速；否则不减速
-                        if orig_sec > tgt_sec and tgt_sec > 0:
-                            # ElevenLabs: 数值越大语速越快 → 使用 orig_sec / tgt_sec
-                            speaking_rate = max(0.5, min(2.0, (orig_sec / tgt_sec)))
-                        else:
-                            speaking_rate = None
+                        speaking_rate = max(0.5, min(2.0, (tgt_sec / orig_sec) if orig_sec > 0 else (base_rate or 1.0)))
                         # 重生成时优先使用新的语速，移除旧的speaking_rate/speed键
                         voice_settings.pop('speaking_rate', None)
                         voice_settings.pop('speed', None)
 
                         regen_file = Path(audio_file).parent / f"regen_{Path(audio_file).name}"
-                        if speaking_rate is not None:
-                            print(f"超出80%，尝试以语速 {speaking_rate:.3f} 重生成 ElevenLabs 片段（仅加速）...")
-                        else:
-                            print("超出80%，但为减速场景，跳过重生成，改为本地对齐（不拉长）")
+                        print(f"超出80%，尝试以语速 {speaking_rate:.3f} 重生成 ElevenLabs 片段...")
                         if voice_settings:
                             print(f"重生成使用 voice_settings: {voice_settings}")
                         if model_id:
                             print(f"重生成使用 model_id: {model_id}")
-                        if speaking_rate is not None:
-                            ok = generate_tts_audio(
-                                text,
-                                voice_id,
-                                regen_file,
-                                speaking_rate=speaking_rate,
-                                voice_settings=voice_settings,
-                                model_id=model_id
-                            )
-                            if ok and regen_file.exists():
-                                new_ratio = (_get_dur_sec(regen_file) / tgt_sec) if tgt_sec > 0 else 1.0
-                                print(f"重生成结果时长比: {new_ratio:.3f}")
-                                adjusted_path = regen_file
-                            else:
-                                print("重生成失败，退回到变速处理（无音量增强）")
-                                adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=seg_vol_boost)
+                        ok = generate_tts_audio(
+                            text,
+                            voice_id,
+                            regen_file,
+                            speaking_rate=speaking_rate,
+                            voice_settings=voice_settings,
+                            model_id=model_id
+                        )
+                        if ok and regen_file.exists():
+                            new_ratio = (_get_dur_sec(regen_file) / tgt_sec) if tgt_sec > 0 else 1.0
+                            print(f"重生成结果时长比: {new_ratio:.3f}")
+                            adjusted_path = regen_file
                         else:
-                            # 不做减速重生，直接用本地对齐（不拉长，无音量增强）
-                            adjusted_path = adjust_audio_length_and_volume(adjusted_path, int(orig_sec*1000), volume_boost=seg_vol_boost)
-                    else:
-                        # 无法重生时，仍然遵循“只加速不减速”
-                        if orig_sec > tgt_sec:
+                            print("重生成失败，退回到20%范围内的变速处理")
                             adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=seg_vol_boost)
-                        else:
-                            adjusted_path = adjust_audio_length_and_volume(adjusted_path, int(orig_sec*1000), volume_boost=seg_vol_boost)
-                else:
-                    # 在阈值内（或重生成不可用），仅进行“加速向内”对齐；无音量增强
-                    if orig_sec > tgt_sec:
-                        adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=seg_vol_boost)
                     else:
-                        adjusted_path = adjust_audio_length_and_volume(adjusted_path, int(orig_sec*1000), volume_boost=seg_vol_boost)
+                        adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=seg_vol_boost)
+                else:
+                    # 在±20%内（或重生成不可用），用本地变速+增益对齐
+                    adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=seg_vol_boost)
                 
                 # 添加输入文件
                 inputs.extend(['-i', str(adjusted_path)])
