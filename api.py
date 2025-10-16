@@ -186,7 +186,7 @@ if __name__ == '__main__':
                       <button id=\"btnRefreshTasks\" type=\"button\" style=\"padding:6px 10px;font-size:12px;\">刷新</button>
                     </div>
                   </div>
-                  <div class=\"task-head\" style=\"display:grid;grid-template-columns:1.6fr 1.2fr 160px 120px;gap:12px;align-items:center;padding:8px 12px;background:#fafafa;border:1px solid #eee;border-bottom:none;border-radius:8px 8px 0 0;\">
+                  <div class=\"task-head\" style=\"display:grid;grid-template-columns:1.6fr 1.2fr 160px 160px;gap:12px;align-items:center;padding:8px 12px;background:#fafafa;border:1px solid #eee;border-bottom:none;border-radius:8px 8px 0 0;\">
                     <div style=\"font-weight:600;font-size:12px;color:#333;\">项目名称</div>
                     <div style=\"font-weight:600;font-size:12px;color:#333;\">目录</div>
                     <div style=\"font-weight:600;font-size:12px;color:#333;\">时间</div>
@@ -275,16 +275,52 @@ if __name__ == '__main__':
                 }
                 function showOverlay(p){ overlay.style.display='flex'; if (typeof p==='number'){ bar.style.width=p+'%'; text.textContent=p.toFixed(0)+'%'; } }
                 function hideOverlay(){ overlay.style.display='none'; bar.style.width='0%'; text.textContent='0%'; }
+                async function deleteTask(taskId){
+                    if (!taskId) return;
+                    // 确认对话框
+                    if (!confirm('确认删除该任务及其目录下所有文件吗？此操作不可恢复。')) return;
+                    console.log('[Delete] start', taskId);
+                    // 按钮临时禁用，避免重复点击
+                    try { taskList.querySelectorAll(`.btn-delete[data-task-id="${taskId}"]`).forEach(b=>{ b.disabled=true; b.textContent='删除中…'; }); } catch(_) {}
+                    try {
+                        const res = await fetch('/funasr_task_delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task_id: taskId }) });
+                        console.log('[Delete] request sent', res.status);
+                        const data = await res.json().catch(()=>({}));
+                        console.log('[Delete] response', data);
+                        if (!res.ok || !data || data.code !== 0) {
+                            alert((data && data.msg) || '删除失败');
+                            return;
+                        }
+                        console.log('[Delete] success, refresh list');
+                        await loadTasks();
+                    } catch (e) {
+                        console.error('[Delete] error', e);
+                        alert('删除失败: ' + e);
+                    } finally {
+                        try { taskList.querySelectorAll(`.btn-delete[data-task-id="${taskId}"]`).forEach(b=>{ b.disabled=false; b.textContent='删除'; }); } catch(_) {}
+                    }
+                }
+                window.deleteTask = deleteTask;
                 async function loadTasks(){
                     try{
                         const res = await fetch('/funasr_tasks', { headers: { 'Accept': 'text/html' } });
                         const html = await res.text();
                         taskList.innerHTML = html && html.trim() ? html : '<li class="task-item" style="display:flex;gap:12px;align-items:center;padding:10px 12px;"><span class="task-meta" style="font-size:12px;color:#666;">暂无任务</span></li>';
+                        try {
+                            taskList.querySelectorAll('.btn-delete').forEach(function(btn){
+                                if (btn.dataset.bound === '1') return;
+                                btn.dataset.bound = '1';
+                                btn.addEventListener('click', function(ev){
+                                    ev.preventDefault(); ev.stopPropagation();
+                                    const id = this.getAttribute('data-task-id') || '';
+                                    if (id) deleteTask(id);
+                                });
+                            });
+                        } catch(_) {}
                         attachTaskNameHandlers();
                         if (taskList.lastElementChild) taskList.lastElementChild.style.borderBottom='none';
                     }catch(e){
                         taskList.innerHTML = '<li class="task-item" style="display:flex;gap:12px;align-items:center;padding:10px 12px;"><span class="task-meta" style="font-size:12px;color:#666;">任务列表加载失败</span></li>';
-                        attachTaskNameHandlers();
                         console.error(e);
                     }
                 }
@@ -514,16 +550,46 @@ if __name__ == '__main__':
                 dir_value = f"{API_RESOURCE}/{name}"
                 dir_html = html.escape(dir_value)
                 lines.append(
-                    f"<li class='task-item' style='display:grid;grid-template-columns:1.6fr 1.2fr 160px 120px;gap:12px;align-items:center;padding:10px 12px;border-bottom:1px solid #f0f0f0;'>"
+                    f"<li class='task-item' style='display:grid;grid-template-columns:1.6fr 1.2fr 160px 160px;gap:12px;align-items:center;padding:10px 12px;border-bottom:1px solid #f0f0f0;'>"
                     f"<div class='task-name' contenteditable='true' spellcheck='false' data-task-id='{task_id_attr}'>{display_name_html}</div>"
                     f"<div class='task-id' style='font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#333;'>{dir_html}</div>"
                     f"<div class='task-time' style='font-size:12px;color:#666;'>{mtxt}</div>"
-                    f"<div class='task-actions'><button type='button' onclick=\"location.href='/view/{name}'\" style='padding:4px 8px;font-size:12px;border:1px solid #007aff;background:#fff;color:#007aff;border-radius:4px;cursor:pointer;'>打开</button></div>"
+                    f"<div class='task-actions' style='display:flex;gap:8px;'><button type='button' onclick=\"location.href='/view/{name}'\" style='padding:4px 8px;font-size:12px;border:1px solid #007aff;background:#fff;color:#007aff;border-radius:4px;cursor:pointer;'>打开</button>"
+                    f"<button type='button' data-task-id='{task_id_attr}' class='btn-delete' style='padding:4px 8px;font-size:12px;border:1px solid #dc3545;background:#fff;color:#dc3545;border-radius:4px;cursor:pointer;'>删除</button></div>"
                     f"</li>"
                 )
             return "\n".join(lines)
         except Exception as e:
             return f"<li class='task-item' style='display:flex;gap:12px;align-items:center;padding:10px 12px;'><span class='task-meta' style='font-size:12px;color:#666;'>加载失败: {str(e)}</span></li>", 500
+
+    @app.route('/funasr_task_delete', methods=['POST'])
+    def funasr_task_delete():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            payload = request.form.to_dict() if request.form else {}
+        task_id = str(payload.get('task_id') or '').strip()
+        if not task_id:
+            return jsonify({"code": 1, "msg": "缺少任务ID"}), 400
+        # 只允许删除 apidata 下长度为10的任务目录
+        if len(task_id) != 10 or '/' in task_id or '..' in task_id:
+            return jsonify({"code": 1, "msg": "非法任务ID"}), 400
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists() or not task_dir.is_dir():
+            return jsonify({"code": 1, "msg": "任务目录不存在"}), 404
+        # 删除目录
+        try:
+            shutil.rmtree(task_dir.as_posix(), ignore_errors=False)
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"删除失败: {e}"}), 500
+        # 同步删除项目名映射
+        try:
+            mapping = _load_project_mapping()
+            if isinstance(mapping, dict) and task_id in mapping:
+                mapping.pop(task_id, None)
+                _save_project_mapping(mapping)
+        except Exception:
+            pass
+        return jsonify({"code": 0, "msg": "ok"})
 
     @app.route('/funasr_project_name', methods=['POST'])
     def funasr_project_name():
