@@ -2773,19 +2773,50 @@ if __name__ == '__main__':
 
                         const tdSel = document.createElement('td'); tdSel.style.padding='6px 8px';
                         const sel = document.createElement('select'); sel.style.minWidth='260px';
+                        // 预置选项
                         premade.forEach(v => {
                             const opt = document.createElement('option');
                             opt.value = v.voice_id;
                             opt.textContent = `${v.name}${v.category?(' ('+v.category+')'):''}`;
                             sel.appendChild(opt);
                         });
-                        if (prevVoiceId) {
+                        // 自定义选项
+                        const optCustom = document.createElement('option');
+                        optCustom.value = '__custom__';
+                        optCustom.textContent = '自定义声音ID';
+                        sel.appendChild(optCustom);
+                        // 自定义输入框
+                        const customWrap = document.createElement('div');
+                        customWrap.style.marginTop = '6px';
+                        const customInput = document.createElement('input');
+                        customInput.type = 'text';
+                        customInput.placeholder = '输入自定义声音ID';
+                        customInput.style.cssText = 'display:none; max-width:340px; padding:6px 8px; border:1px solid #ddd; border-radius:4px;';
+                        customWrap.appendChild(customInput);
+
+                        // 初始值：若之前保存的ID不在预置中，则视为自定义
+                        if (prevVoiceId && premade.some(v=>v.voice_id===prevVoiceId)) {
                             sel.value = prevVoiceId;
-                        }
-                        if (!sel.value && sel.options.length) {
+                        } else if (prevVoiceId) {
+                            sel.value = '__custom__';
+                            customInput.style.display = '';
+                            customInput.value = prevVoiceId;
+                        } else if (sel.options.length) {
                             sel.value = sel.options[0].value;
                         }
-                        tdSel.appendChild(sel); tr.appendChild(tdSel);
+                        // 选择切换时显示/隐藏自定义输入框
+                        sel.addEventListener('change', ()=>{
+                            if (sel.value === '__custom__') {
+                                customInput.style.display = '';
+                                customInput.focus();
+                            } else {
+                                customInput.style.display = 'none';
+                            }
+                        });
+
+                        tdSel.appendChild(sel);
+                        tdSel.appendChild(customWrap);
+                        tr.appendChild(tdSel);
 
                         const tdModel = document.createElement('td'); tdModel.style.padding='6px 8px';
                         const modelSel = document.createElement('select');
@@ -2813,7 +2844,7 @@ if __name__ == '__main__':
                         tdAct.appendChild(btnPlay); tr.appendChild(tdAct);
                         bodyEl.appendChild(tr);
 
-                        currentMapping[spk] = { voiceSelect: sel, modelSelect: modelSel, original: prev };
+                        currentMapping[spk] = { voiceSelect: sel, modelSelect: modelSel, original: prev, customInput };
                     });
 
                     dlg.addEventListener('click', (e) => { if (e.target === dlg) document.body.removeChild(dlg); });
@@ -2828,7 +2859,12 @@ if __name__ == '__main__':
                         Object.keys(currentMapping).forEach(spk => {
                             const refs = currentMapping[spk];
                             if (!refs || !refs.voiceSelect) return;
-                            const voiceId = refs.voiceSelect.value;
+                            let voiceId = refs.voiceSelect.value;
+                            if (voiceId === '__custom__') {
+                                const v = (refs.customInput && refs.customInput.value || '').trim();
+                                if (!v) return; // 未填写自定义ID则不保存
+                                voiceId = v;
+                            }
                             if (!voiceId) return;
                             const entry = { voice_id: voiceId };
                             if (refs.modelSelect && refs.modelSelect.value) {
@@ -2932,7 +2968,12 @@ if __name__ == '__main__':
                         Object.keys(currentMapping).forEach(spk => {
                             const refs = currentMapping[spk];
                             if (!refs || !refs.voiceSelect) return;
-                            const voiceId = refs.voiceSelect.value;
+                            let voiceId = refs.voiceSelect.value;
+                            if (voiceId === '__custom__') {
+                                const v = (refs.customInput && refs.customInput.value || '').trim();
+                                if (!v) return; // 未填写自定义ID则不保存
+                                voiceId = v;
+                            }
                             if (!voiceId) return;
                             const entry = { voice_id: voiceId };
                             if (refs.modelSelect && refs.modelSelect.value) {
