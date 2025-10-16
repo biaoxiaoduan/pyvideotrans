@@ -2248,7 +2248,51 @@ if __name__ == '__main__':
                         alert('没有字幕数据，无法合成视频');
                         return;
                     }
-                    
+                    // 先选择或确认TTS语言
+                    let defaultLang = (window.translationLanguage || '').trim();
+                    if (!defaultLang) {
+                        try {
+                            const resLang = await fetch(`/viewer_api/${taskId}/check_voice_mapping`);
+                            await resLang.json();
+                        } catch(_) {}
+                        defaultLang = 'auto';
+                    }
+                    const langDlg = document.createElement('div');
+                    langDlg.className='modal-overlay'; langDlg.style.display='flex';
+                    langDlg.innerHTML = `
+                      <div class="modal" style="width:420px; text-align:left;">
+                        <h4 style="margin-bottom:6px;">选择 TTS 语言</h4>
+                        <p style="margin:4px 0 10px; color:#555;">默认使用翻译时选择的语言，可在此调整。</p>
+                        <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+                          <select id="ttsLangSel" style="flex:1; padding:6px 8px; border:1px solid #ddd; border-radius:6px;">
+                            <option value="auto">自动检测/默认</option>
+                            <option value="zh">中文</option>
+                            <option value="en">英语</option>
+                            <option value="ja">日语</option>
+                            <option value="ko">韩语</option>
+                            <option value="es">西班牙语</option>
+                            <option value="fr">法语</option>
+                            <option value="de">德语</option>
+                            <option value="pt">葡萄牙语</option>
+                            <option value="it">意大利语</option>
+                            <option value="ru">俄语</option>
+                            <option value="th">泰语</option>
+                          </select>
+                        </div>
+                        <div style="display:flex; gap:8px; justify-content:flex-end;">
+                          <button id="btnLangCancel">取消</button>
+                          <button id="btnLangOk" style="padding:6px 10px; background:#ff6b35; color:#fff; border:none; border-radius:6px;">继续合成</button>
+                        </div>
+                      </div>`;
+                    document.body.appendChild(langDlg);
+                    const langSel = langDlg.querySelector('#ttsLangSel');
+                    langSel.value = defaultLang || 'auto';
+                    const ttsLang = await new Promise(resolve => {
+                        langDlg.querySelector('#btnLangCancel').addEventListener('click', ()=>{ document.body.removeChild(langDlg); resolve(null); });
+                        langDlg.addEventListener('click', (e)=>{ if(e.target===langDlg){ document.body.removeChild(langDlg); resolve(null); } });
+                        langDlg.querySelector('#btnLangOk').addEventListener('click', ()=>{ const v=langSel.value||'auto'; document.body.removeChild(langDlg); resolve(v); });
+                    });
+                    if (!ttsLang) return; // 用户取消
                     const confirmed = confirm('开始合成视频？这将使用Demucs分离原视频人声，然后与TTS音频合成新视频。');
                     if (!confirmed) return;
                     
@@ -2288,7 +2332,8 @@ if __name__ == '__main__':
                             text: String(c.text || '').trim(),
                             translated_text: String((c.translated_text || c.translation || c.translated_text_en || c.translated_text_es || c.translated_text_fr || c.translated_text_ja || c.translated_text_zh || c.translated_text_pt || c.translated_text_th || '')).trim(),
                             speaker: String(c.speaker || '').trim(),
-                        }))
+                        })),
+                        tts_language: ttsLang
                     };
                     console.log('发送生成音频请求数据(合成视频前置):', genPayload);
                     synthModalMsg.textContent = '正在生成配音音频...';
@@ -3475,10 +3520,14 @@ if __name__ == '__main__':
             tts_dir = Path(TARGET_DIR) / tts_task_id
             tts_dir.mkdir(parents=True, exist_ok=True)
 
-            # 启动TTS生成任务
+            # 选择的TTS语言（来自前端 onSynthesizeVideo 弹窗）
+            tts_language = (data.get('tts_language') or '').strip() or 'auto'
+
+            # 启动TTS生成任务，并传入语言
             threading.Thread(target=start_tts_generation_task, args=(
-                tts_task_id, 
-                data['subtitles']
+                tts_task_id,
+                data['subtitles'],
+                tts_language
             )).start()
 
             return jsonify({
@@ -5593,7 +5642,7 @@ if __name__ == '__main__':
             print(f"音频混合失败: {str(e)}")
             return False
 
-    def start_tts_generation_task(task_id, subtitles):
+    def start_tts_generation_task(task_id, subtitles, tts_language='auto'):
         """启动TTS音频生成任务的后台处理函数"""
         try:
             from videotrans import tts
@@ -5656,7 +5705,11 @@ if __name__ == '__main__':
             
             # 调用TTS引擎生成音频
             try:
-                tts.run(queue_tts=queue_tts, language="zh-cn", 
+                # 使用用户选择的语言（默认 auto 时回退到 zh-cn 以保持兼容）
+                lang = (tts_language or 'auto').lower()
+                if lang == 'auto':
+                    lang = 'zh-cn'
+                tts.run(queue_tts=queue_tts, language=lang, 
                        inst=None, uuid=task_id, play=False, is_test=False)
                 print("TTS引擎调用完成")
             except Exception as e:
