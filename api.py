@@ -1257,7 +1257,7 @@ if __name__ == '__main__':
                     translatedInput.style.width = '100%';
                     translatedInput.addEventListener('input', () => { 
                         c.translated_text = translatedInput.value; 
-                        saveTranslationText(); // 翻译文本修改时自动保存
+                        // 取消自动保存翻译文本，请使用“保存翻译”按钮
                     });
                     
                     translatedWrapper.appendChild(translatedLabel);
@@ -1647,8 +1647,7 @@ if __name__ == '__main__':
                 dragHint.style.display = 'none';
             }
 
-            // 自动保存定时器
-            let saveTimeout = null;
+            // 移除自动保存定时器，改为手动保存
             let isSaving = false;
 
             // 更新保存状态显示
@@ -1715,66 +1714,11 @@ if __name__ == '__main__':
                 }
             }
 
-            // 自动保存字幕到SRT文件
-            async function autoSaveSubtitles() {
-                return await saveSubtitles(true);
-            }
+            // 移除自动保存辅助函数
 
-            // 保存翻译文本
-            let translationSaveTimeout = null;
-            async function saveTranslationText() {
-                if (translationSaveTimeout) {
-                    clearTimeout(translationSaveTimeout);
-                }
-                
-                translationSaveTimeout = setTimeout(async () => {
-                    try {
-                        const payload = { 
-                            subtitles: cues.map(c => ({
-                                start: Number(c.start)||0,
-                                end: Number(c.end)||0,
-                                text: String(c.text||'').trim(),
-                                speaker: String(c.speaker||'').trim(),
-                                translated_text: String(c.translated_text||'').trim(),
-                            })), 
-                            target_language: 'en' // 默认英语，可以根据需要调整
-                        };
-                        
-                        const res = await fetch(`/viewer_api/${taskId}/save_translation`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload)
-                        });
-                        
-                        const data = await res.json();
-                        if (data && data.code === 0) {
-                            console.log('翻译文本已保存');
-                        } else {
-                            console.error('保存翻译文本失败:', data && data.msg ? data.msg : '未知错误');
-                        }
-                    } catch (e) {
-                        console.error('保存翻译文本失败:', e);
-                    }
-                }, 1000); // 1秒后自动保存
-            }
+            // 取消翻译文本的自动保存，保留手动保存按钮
 
-            // 触发自动保存（防抖）
-            function triggerAutoSave(immediate = false) {
-                if (saveTimeout) {
-                    clearTimeout(saveTimeout);
-                }
-                
-                if (immediate) {
-                    // 立即保存
-                    autoSaveSubtitles();
-                } else {
-                    // 延迟保存
-                    updateSaveStatus('有未保存的更改', '#ffc107');
-                    saveTimeout = setTimeout(() => {
-                        autoSaveSubtitles();
-                    }, 1000); // 1秒后自动保存
-                }
-            }
+            // 移除自动保存触发器
 
             // 更新字幕时间
             function updateCueTime(cueIndex, newStart, newEnd) {
@@ -1789,8 +1733,7 @@ if __name__ == '__main__':
                     renderList();
                     drawTimeline(videoEl.currentTime * 1000);
                     
-                    // 触发自动保存
-                    triggerAutoSave();
+                    // 不再自动保存，由用户手动点击“保存”
                 }
             }
 
@@ -1815,7 +1758,7 @@ if __name__ == '__main__':
                 cues.splice(index + 1, 0, newCue);
                 renderList();
                 drawTimeline(videoEl.currentTime * 1000);
-                triggerAutoSave(true); // 立即保存
+                // 不再自动保存，由用户手动点击“保存”
             }
 
             // 删除指定行字幕
@@ -1824,7 +1767,7 @@ if __name__ == '__main__':
                 cues.splice(index, 1);
                 renderList();
                 drawTimeline(videoEl.currentTime * 1000);
-                triggerAutoSave(true); // 立即保存
+                // 不再自动保存，由用户手动点击“保存”
             }
 
             // 将屏幕坐标转换为时间
@@ -1944,9 +1887,9 @@ if __name__ == '__main__':
             // 鼠标释放事件
             canvas.addEventListener('mouseup', (e) => {
                 if (isDragging) {
-                    // 如果正在拖拽字幕，立即触发保存
+                    // 拖拽结束后立即保存字幕到文件
                     if (dragCueIndex >= 0) {
-                        triggerAutoSave(true); // 立即保存
+                        saveSubtitles(true);
                     }
                     
                     isDragging = false;
@@ -1960,9 +1903,9 @@ if __name__ == '__main__':
             // 鼠标离开事件
             canvas.addEventListener('mouseleave', (e) => {
                 if (isDragging) {
-                    // 如果正在拖拽字幕，立即触发保存
+                    // 拖拽中离开画布时也立即保存一次
                     if (dragCueIndex >= 0) {
-                        triggerAutoSave(true); // 立即保存
+                        saveSubtitles(true);
                     }
                     
                     isDragging = false;
