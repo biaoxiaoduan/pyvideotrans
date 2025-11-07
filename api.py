@@ -454,6 +454,7 @@ if __name__ == '__main__':
                 audio_full = task_dir / 'audio_full.wav'
                 vocals_path = task_dir / 'audio_vocals.wav'
                 bg_path = task_dir / 'audio_bg.wav'
+                video_only_path = task_dir / 'video_only.mp4'
 
                 # 如已存在则跳过
                 if not audio_full.exists():
@@ -484,6 +485,32 @@ if __name__ == '__main__':
                                 bg_src.replace(bg_path)
                     except Exception:
                         pass
+
+                # 提前生成无音轨视频，命名为 video_only.mp4（即便源无音轨也输出）
+                try:
+                    if not video_only_path.exists():
+                        from videotrans.configure import config as _cfg
+                        # 找到任务目录中的真实视频文件（按扩展名）
+                        real_video = None
+                        for f in task_dir.iterdir():
+                            if f.is_file() and any(f.name.lower().endswith('.'+ext.lower()) for ext in _cfg.VIDEO_EXTS):
+                                real_video = f
+                                break
+                        # 若未在任务目录找到，则使用上传源文件（若其为视频）
+                        if real_video is None:
+                            sv = Path(src_video)
+                            if sv.exists() and any(sv.name.lower().endswith('.'+ext.lower()) for ext in _cfg.VIDEO_EXTS):
+                                real_video = sv
+                        if real_video is not None:
+                            # 仅移除音轨，不转码视频
+                            tools.runffmpeg([
+                                '-hide_banner','-ignore_unknown','-y',
+                                '-i', real_video.as_posix(),
+                                '-c:v','copy','-an',
+                                video_only_path.as_posix()
+                            ])
+                except Exception:
+                    pass
             except Exception:
                 pass
 
@@ -4413,7 +4440,7 @@ if __name__ == '__main__':
             if not audio_dir.exists():
                 return jsonify({"code": 1, "msg": "没有找到已生成的音频文件"}), 400
             
-            # 查找所有音频片段文件
+            # 查找所有音频片段文件（兼容新的基于MD5缓存的命名）
             audio_files = []
             print(f"接收到的字幕数据: {len(subtitles)} 条")
             print(f"第一条字幕数据: {subtitles[0] if subtitles else 'None'}")
@@ -4432,15 +4459,42 @@ if __name__ == '__main__':
                     print(f"警告：字幕 {i+1} 缺少时间字段: {subtitle}")
                     continue
                     
-                segment_file = audio_dir / f"segment_{i+1:04d}.wav"
-                if segment_file.exists():
+                # 优先从 tts_cache 基于规则命名的缓存命中
+                cache_dir = task_dir / 'tts_cache'
+                seg_file = None
+                if cache_dir.exists():
+                    import hashlib
+                    text = (subtitle.get('translated_text') or subtitle.get('text') or '').strip()
+                    voice_id = (subtitle.get('voice_id') or '')
+                    # 如果subtitle没有voice_id，尝试从映射文件中取（与生成时一致）
+                    if not voice_id:
+                        try:
+                            mapping_file = task_dir / f"{task_id}_voice_mapping.json"
+                            if mapping_file.exists():
+                                import json
+                                vm = json.loads(mapping_file.read_text(encoding='utf-8'))
+                                vm = vm.get('voice_mapping') or {}
+                                spk = (subtitle.get('speaker') or '').strip()
+                                if spk and spk in vm:
+                                    voice_id = vm[spk].get('voice_id') or ''
+                        except Exception:
+                            pass
+                    raw_key = f"{int(start_time)}|{int(end_time)}|{voice_id}|{text}"
+                    md5name = hashlib.md5(raw_key.encode('utf-8')).hexdigest()
+                    cand = cache_dir / f"{md5name}.wav"
+                    if cand.exists():
+                        seg_file = cand
+                # 兼容旧命名
+                if seg_file is None:
+                    seg_file = audio_dir / f"segment_{i+1:04d}.wav"
+                if seg_file.exists():
                     audio_files.append({
                         'start_time': start_time,
                         'end_time': end_time,
-                        'file': str(segment_file)
+                        'file': str(seg_file)
                     })
                 else:
-                    print(f"警告：音频文件不存在: {segment_file}")
+                    print(f"警告：音频文件不存在: {seg_file}")
             
             if not audio_files:
                 return jsonify({"code": 1, "msg": "没有找到有效的音频文件"}), 400
@@ -4536,7 +4590,7 @@ if __name__ == '__main__':
             audio_dir = task_dir / "generated_audio"
             audio_dir.mkdir(exist_ok=True)
             
-            # 为每条字幕生成TTS音频
+            # 为每条字幕生成TTS音频（加入基于MD5的去重缓存）
             generated_audio_files = []
             total_duration = 0
             
@@ -4590,16 +4644,27 @@ if __name__ == '__main__':
                     if model_id:
                         print(f"字幕 {i+1} model_id: {model_id}")
 
-                    # 生成TTS音频
-                    audio_file = audio_dir / f"segment_{i+1:04d}.wav"
-                    success = generate_tts_audio(
-                        translated_text,
-                        voice_id,
-                        audio_file,
-                        speaking_rate=speaking_rate,
-                        voice_settings=speaker_voice_settings,
-                        model_id=model_id
-                    )
+                    # 生成用于缓存命中的指纹（开始|结束|音色ID|文本）
+                    import hashlib
+                    raw_key = f"{int(start_time)}|{int(end_time)}|{voice_id}|{translated_text.strip()}"
+                    md5name = hashlib.md5(raw_key.encode('utf-8')).hexdigest()
+                    cache_dir = task_dir / 'tts_cache'
+                    cache_dir.mkdir(exist_ok=True)
+                    audio_file = cache_dir / f"{md5name}.wav"
+
+                    # 命中缓存则直接使用；否则调用TTS生成
+                    if audio_file.exists() and audio_file.stat().st_size > 0:
+                        print(f"命中TTS缓存: {audio_file.name}")
+                        success = True
+                    else:
+                        success = generate_tts_audio(
+                            translated_text,
+                            voice_id,
+                            audio_file,
+                            speaking_rate=speaking_rate,
+                            voice_settings=speaker_voice_settings,
+                            model_id=model_id
+                        )
                     
                     if success:
                         generated_audio_files.append({
@@ -5549,7 +5614,13 @@ if __name__ == '__main__':
                         base_rate = segment_rate
 
                     if voice_id and text:
-                        speaking_rate = max(0.5, min(2.0, (tgt_sec / orig_sec) if orig_sec > 0 else (base_rate or 1.0)))
+                        # 调整逻辑：当 ratio>1.8 时才重生，且使用 speaking_rate = min(3.0, ratio)
+                        # ratio = orig_sec / tgt_sec，上面 need_regen 已经确保 ratio>1.8 或 <0.2
+                        # 仅当原始>目标（ratio>1.8）时尝试重生；ratio<=1 的情况不处理
+                        if ratio <= 1.0:
+                            adjusted_path = adjust_audio_length_and_volume(adjusted_path, target_duration, volume_boost=seg_vol_boost)
+                        else:
+                            speaking_rate = min(3.0, float(ratio))
                         # 重生成时优先使用新的语速，移除旧的speaking_rate/speed键
                         voice_settings.pop('speaking_rate', None)
                         voice_settings.pop('speed', None)
@@ -5586,9 +5657,11 @@ if __name__ == '__main__':
                 
                 # 记录有效的片段索引（从1开始，因为0是静音文件）
                 current_index = len(valid_segments) + 1
+                end_time_sec = start_time + (target_duration/1000.0)
                 valid_segments.append({
                     'index': current_index,
                     'start_time': start_time,
+                    'end_time': end_time_sec,
                     'file': str(adjusted_path)
                 })
                 
@@ -5599,11 +5672,58 @@ if __name__ == '__main__':
                 print("没有有效的音频片段，无法合成")
                 return False
             
-            # 合并所有音频
+            # 计算TTS片段之间的空白区间（单位：秒）
+            gaps = []
+            if valid_segments:
+                sorted_segs = sorted(valid_segments, key=lambda s: s['start_time'])
+                cursor = 0.0
+                for s in sorted_segs:
+                    if s['start_time'] > cursor:
+                        gaps.append((cursor, s['start_time']))
+                    cursor = max(cursor, s['end_time'])
+                if total_duration and (cursor < total_duration/1000.0):
+                    gaps.append((cursor, total_duration/1000.0))
+
+            # 若存在原人声，构造填充分段
+            from pathlib import Path as _Path2
+            vocals_labels = []
+            try:
+                p = _Path2(output_file)
+                parts = p.as_posix().split('/')
+                vocals_path = None
+                if 'apidata' in parts:
+                    tidx = parts.index('apidata')
+                    if tidx+1 < len(parts):
+                        _tid = parts[tidx+1]
+                        cand = (Path(TARGET_DIR) / _tid / 'audio_vocals.wav')
+                        if cand.exists():
+                            vocals_path = cand
+                if vocals_path and gaps:
+                    # 统计现有输入个数的工具
+                    def _count_inputs(arr):
+                        return sum(1 for x in arr if x == '-i')
+                    for (gs, ge) in gaps:
+                        # 追加人声源输入
+                        before = _count_inputs(inputs)
+                        inputs.extend(['-i', str(vocals_path)])
+                        new_idx = before  # 新增输入的索引编号
+                        delay_ms = int(gs * 1000)
+                        # 在人声文件上裁切 [gs, ge]，并延迟到 gs 起点
+                        filter_complex.append(
+                            f'[{new_idx}:a]atrim={gs}:{ge},asetpts=PTS-STARTPTS,adelay={delay_ms}|{delay_ms}[a{new_idx}]'
+                        )
+                        vocals_labels.append(f'[a{new_idx}]')
+                    print(f"将使用原人声填充 {len(gaps)} 段空白，总时长约 {sum(ge-gs for gs,ge in gaps):.2f}s")
+            except Exception:
+                pass
+
+            # 合并所有音频（静音底轨 + 全部TTS段 + 人声填充分段）
             mix_inputs = "[0:a]"
             for segment in valid_segments:
                 mix_inputs += f"[a{segment['index']}]"
-            mix_inputs += f"amix=inputs={len(valid_segments)+1}:duration=longest[out]"
+            for lab in vocals_labels:
+                mix_inputs += lab
+            mix_inputs += f"amix=inputs={1 + len(valid_segments) + len(vocals_labels)}:duration=longest[out]"
             
             filter_complex.append(mix_inputs)
             
@@ -5653,42 +5773,54 @@ if __name__ == '__main__':
 
             # Step 1: 音视频分离
             print("[1/4] 正在分离音视频...")
-            tools.set_process(text='[1/4] 正在分离音视频...', uuid=task_id)
-            video_only_path = task_dir / "video_only.mp4"
-            audio_only_path = task_dir / "audio_only.wav"
-
-            # 提取无声视频
-            tools.runffmpeg([
-                '-y', '-i', str(video_path),
-                '-c:v', 'copy', '-an', str(video_only_path)
-            ])
-
-            # 提取音频（双声道、44100Hz、s16）
-            tools.runffmpeg([
-                '-y', '-i', str(video_path),
-                '-vn', '-ac', '2', '-ar', '44100', '-sample_fmt', 's16', str(audio_only_path)
-            ])
-
-            if not video_only_path.exists() or not audio_only_path.exists():
-                print("分离音视频失败：未生成 video_only 或 audio_only")
-                return
-
-            print(f"已生成: {video_only_path.name}, {audio_only_path.name}")
-
-            # Step 2: Demucs 分离保留背景音
-            print("[2/4] 正在使用 Demucs 分离背景音...")
-            tools.set_process(text='[2/4] 正在分离背景音...', uuid=task_id)
-            # 在任务目录下生成 background.wav / vocal.wav，然后重命名背景音为 audio_background.wav
-            demucs_ok = separate_voice_background_demucs(str(audio_only_path), str(task_dir))
-            bgm_source = task_dir / "background.wav"
+            audio_bg_path = src_task_dir / "audio_bg.wav"
+            video_bg_path = src_task_dir / "video_only.mp4"
+            print(audio_bg_path)
             audio_background_path = task_dir / "audio_background.wav"
-            if demucs_ok and bgm_source.exists():
-                shutil.copy2(bgm_source, audio_background_path)
-                print(f"背景音生成成功: {audio_background_path}")
+            video_only_path = src_task_dir / "video_only.mp4"
+            audio_only_path = src_task_dir / "audio_only.wav"
+            audio_vocal_path = src_task_dir / "audio_vocals.wav"
+            if audio_bg_path.exists() and video_bg_path.exists():
+                print('audio_bg_path exists')
+                audio_background_path = audio_bg_path
             else:
-                # 失败时按文档回退使用原音频作为背景音
-                shutil.copy2(audio_only_path, audio_background_path)
-                print("Demucs 分离失败或输出缺失，使用原音频作为背景音")
+                tools.set_process(text='[1/4] 正在分离音视频...', uuid=task_id)
+                video_only_path = task_dir / "video_only.mp4"
+                audio_only_path = task_dir / "audio_only.wav"
+                audio_vocal_path = src_task_dir / "vocal.wav"
+
+                # 提取无声视频
+                tools.runffmpeg([
+                    '-y', '-i', str(video_path),
+                    '-c:v', 'copy', '-an', str(video_only_path)
+                ])
+
+                # 提取音频（双声道、44100Hz、s16）
+                tools.runffmpeg([
+                    '-y', '-i', str(video_path),
+                    '-vn', '-ac', '2', '-ar', '44100', '-sample_fmt', 's16', str(audio_only_path)
+                ])
+
+                if not video_only_path.exists() or not audio_only_path.exists():
+                    print("分离音视频失败：未生成 video_only 或 audio_only")
+                    return
+
+                print(f"已生成: {video_only_path.name}, {audio_only_path.name}")
+
+                # Step 2: Demucs 分离保留背景音
+                print("[2/4] 正在使用 Demucs 分离背景音...")
+                tools.set_process(text='[2/4] 正在分离背景音...', uuid=task_id)
+                # 在任务目录下生成 background.wav / vocal.wav，然后重命名背景音为 audio_background.wav
+                demucs_ok = separate_voice_background_demucs(str(audio_only_path), str(task_dir))
+                bgm_source = task_dir / "background.wav"
+                audio_background_path = task_dir / "audio_background.wav"
+                if demucs_ok and bgm_source.exists():
+                    shutil.copy2(bgm_source, audio_background_path)
+                    print(f"背景音生成成功: {audio_background_path}")
+                else:
+                    # 失败时按文档回退使用原音频作为背景音
+                    shutil.copy2(audio_only_path, audio_background_path)
+                    print("Demucs 分离失败或输出缺失，使用原音频作为背景音")
 
             # Step 3: 寻找 generated_audio 中的 final 音频并混合
             print("[3/4] 正在查找 generated_audio 中的 final 音频...")
