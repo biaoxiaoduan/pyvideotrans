@@ -1014,7 +1014,6 @@ if __name__ == '__main__':
                     <button id=\"btnSaveTranslation\" style=\"padding:6px 12px; border:1px solid #17a2b8; background:#17a2b8; color:#fff; border-radius:6px; cursor:pointer; display:none;\">保存翻译</button>
                     <button id=\"btnVoiceClone\" style=\"padding:6px 12px; border:1px solid #e91e63; background:#e91e63; color:#fff; border-radius:6px; cursor:pointer;\">语音克隆</button>
                     <button id=\"btnSelectVoice\" style=\"padding:6px 12px; border:1px solid #673ab7; background:#673ab7; color:#fff; border-radius:6px; cursor:pointer;\">选择自带音色</button>
-                    
                     <button id=\"btnSynthesizeVideo\" style=\"padding:6px 12px; border:1px solid #ff6b35; background:#ff6b35; color:#fff; border-radius:6px; cursor:pointer;\">合成视频</button>
                     <button id=\"btnAddSubtitles\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">添加字幕</button>
                 </div>
@@ -1035,7 +1034,7 @@ if __name__ == '__main__':
                 </div>
                 <div class=\"player\"> 
                     <div id=\"mediaInfo\" style=\"font-size:12px;color:#666;margin-bottom:4px;\"></div>
-                    <video id=\"video\" src=\"((VIDEO_URL))\" controls crossorigin=\"anonymous\" style=\"width:100%;max-height:60vh;background:#000\"></video>
+                    <video id=\"video\" controls crossorigin=\"anonymous\" style=\"width:100%;max-height:60vh;background:#000\"></video>
                     <div class=\"timeline-wrap\" style=\"position: relative;\">
                         <div style=\"display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;\">
                             <div style=\"font-size: 12px; color: #666;\">
@@ -1103,6 +1102,68 @@ if __name__ == '__main__':
             window.langSwitcher = document.getElementById('langSwitcher');
             if (!window.availableLangs) window.availableLangs = [];
             if (!window.currentLang) window.currentLang = '';
+            // 单例音频播放器用于TTS试听
+            const ttsAudioPlayer = new Audio();
+            ttsAudioPlayer.preload = 'auto';
+            // 前端缓存语音映射（用于计算缓存文件名）
+            window.voiceMapping = {};
+            let voiceMapLoading = false; let voiceMapLoaded = false;
+            async function loadVoiceMapping(){
+                if (voiceMapLoaded || voiceMapLoading) return;
+                voiceMapLoading = true;
+                try{
+                    const r = await fetch(`/viewer_api/${taskId}/check_voice_mapping?detail=1`);
+                    const j = await r.json();
+                    if (j && j.code === 0 && j.voice_mapping){ window.voiceMapping = j.voice_mapping || {}; voiceMapLoaded = true; }
+                }catch(e){ console.warn('loadVoiceMapping error', e); }
+                finally { voiceMapLoading = false; }
+            }
+            async function getVoiceIdForSpeaker(speaker){
+                // 刷新最新映射
+                try{
+                    const r = await fetch(`/viewer_api/${taskId}/check_voice_mapping?detail=1`);
+                    const j = await r.json();
+                    if (j && j.code === 0 && j.voice_mapping){ window.voiceMapping = j.voice_mapping || {}; }
+                }catch(e){ console.warn('refresh voiceMapping failed', e); }
+                const norm = s => String(s||'').trim().toLowerCase();
+                const target = norm(speaker);
+                // 精确匹配
+                if (window.voiceMapping && window.voiceMapping[speaker] && window.voiceMapping[speaker].voice_id){
+                    return window.voiceMapping[speaker].voice_id;
+                }
+                // 宽松匹配：去空白/大小写
+                for (const [k,v] of Object.entries(window.voiceMapping || {})){
+                    if (norm(k) === target && v && v.voice_id) return v.voice_id;
+                }
+                // 可选：spk01 与 spk1 归一
+                const stripZero = s => norm(s).replace(/^spk0+/, 'spk');
+                const t2 = stripZero(speaker);
+                for (const [k,v] of Object.entries(window.voiceMapping || {})){
+                    if (stripZero(k) === t2 && v && v.voice_id) return v.voice_id;
+                }
+                return '';
+            }
+
+            async function playTtsForIndex(idx){
+                const c = cues[idx]; if (!c) return;
+                const start = Number(c.start)||0; const end = Number(c.end)||0;
+                const text = String(c.translated_text || c.text || '').trim();
+                const speaker = String(c.speaker || '').trim();
+                if (!text || end<=start) { alert('该行无有效文本或时间'); return; }
+                const voice_id = await getVoiceIdForSpeaker(speaker);
+                if (!voice_id){ alert('未找到该说话人的 voice_id，请先在“语音克隆/选择音色”建立映射'); return; }
+                const raw = `${start}|${end}|${voice_id}|${text}`;
+                let md5hex = '';
+                try{ const buf = await crypto.subtle.digest('MD5', new TextEncoder().encode(raw)); md5hex = Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join(''); }catch(e){ console.warn('md5 error', e); }
+                const cacheUrl = `/${'apidata'}/${taskId}/tts_cache/${md5hex}.wav`;
+                try{ const head = await fetch(cacheUrl, {method:'HEAD'}); if (head.ok){ ttsAudioPlayer.src = cacheUrl; await ttsAudioPlayer.play(); return; } }catch(e){}
+                try{
+                    const res = await fetch(`/viewer_api/${taskId}/gen_tts_one`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({start_time:start, end_time:end, text, speaker})});
+                    const data = await res.json();
+                    if (data && data.code === 0 && data.url){ ttsAudioPlayer.src = data.url; await ttsAudioPlayer.play(); }
+                    else { alert(data && data.msg ? data.msg : '生成/获取TTS失败'); }
+                }catch(e){ console.error(e); alert('生成/播放失败'); }
+            }
             window.setupLangSwitcher = function setupLangSwitcher(){
                 if (!window.langSwitcher) window.langSwitcher = document.getElementById('langSwitcher');
                 var sel = window.langSwitcher;
@@ -1369,6 +1430,69 @@ if __name__ == '__main__':
 
                     rowBtnWrap.appendChild(btnAdd);
                     rowBtnWrap.appendChild(btnDel);
+                    // 播放TTS按钮
+                    const btnPlayTTS = document.createElement('button');
+                    btnPlayTTS.textContent = '▶︎ 播放TTS';
+                    btnPlayTTS.title = '仅播放本行TTS片段';
+                    btnPlayTTS.style.cssText = 'padding:2px 8px; font-size:12px; border:1px solid #007AFF; background:#fff; color:#007AFF; border-radius:4px; cursor:pointer;';
+                    btnPlayTTS.addEventListener('click', async (ev) => {
+                        ev.stopPropagation();
+                        try {
+                            const c = cues[idx];
+                            if (!c) return;
+                            const row = listEl.querySelector(`.item[data-idx="${idx+1}"]`);
+                            const translatedNow = row ? (row.querySelector(`[data-role="translated-${idx}"]`)?.value || '').trim() : '';
+                            const originalNow = row ? (row.querySelector(`[data-role="original-${idx}"]`)?.value || '').trim() : '';
+                            const selectedLang = (window.currentLang || '');
+                            const fallbackTranslatedByLang =
+                                (selectedLang ? (String(c['translated_text_' + selectedLang] || '').trim()) : '') ||
+                                String(c.translated_text_en || '').trim() ||
+                                String(c.translated_text_es || '').trim() ||
+                                String(c.translated_text_fr || '').trim() ||
+                                String(c.translated_text_ja || '').trim() ||
+                                String(c.translated_text_zh || '').trim() ||
+                                String(c.translated_text_pt || '').trim() ||
+                                String(c.translated_text_th || '').trim() ||
+                                String(c.translated_text || '').trim();
+                            const fallbackOriginal = (c.text && String(c.text).trim()) || '';
+                            console.log('[playTTS] 行号=', idx+1, '当前语言=', selectedLang || '(默认)');
+                            console.log('[playTTS] 输入框-翻译 translatedNow.len=', translatedNow.length, 'value=', translatedNow);
+                            console.log('[playTTS] 输入框-原文 originalNow.len=', originalNow.length, 'value=', originalNow);
+                            console.log('[playTTS] 数据-按语言翻译 len=', fallbackTranslatedByLang.length);
+                            console.log('[playTTS] 数据-原文 c.text.len=', fallbackOriginal.length);
+                            // 优先级：翻译(输入框) > 数据翻译(按当前语言链) > 原文(输入框) > 原文(数据)
+                            let textChosen = translatedNow || fallbackTranslatedByLang || originalNow || fallbackOriginal;
+                            const textSourceLabel = translatedNow ? `翻译(输入框${selectedLang?'-'+selectedLang:''})` :
+                                (fallbackTranslatedByLang ? `翻译(数据${selectedLang?'-'+selectedLang:''})` : (originalNow ? '原文(输入框)' : '原文(数据)'));
+                            if (!textChosen) { console.warn('[playTTS] 无可用文本，放弃播放'); alert('该行没有可用文本（翻译/原文均为空）'); return; }
+                            console.log('[playTTS] 最终使用来源=', textSourceLabel, 'len=', textChosen.length, 'text=', textChosen);
+                            const payload = {
+                                index: idx,
+                                start_time: Number(c.start)||0,
+                                end_time: Number(c.end)||0,
+                                text: String(textChosen).trim(),
+                                speaker: String(c.speaker || '').trim()
+                            };
+                            console.log('[playTTS] 请求单段音频 payload=', { source: textSourceLabel, ...payload });
+                            const r = await fetch(`/viewer_api/${taskId}/cue_audio`, {
+                                method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+                            });
+                            const j = await r.json();
+                            console.log('[playTTS] cue_audio 返回=', j);
+                            if (j && j.code === 0 && j.url){
+                                ttsAudioPlayer.src = j.url;
+                                await ttsAudioPlayer.play();
+                                const tip = document.createElement('div');
+                                tip.style.cssText = 'position:fixed;top:20px;left:20px;z-index:1000;background:#007AFF;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;';
+                                tip.textContent = `播放TTS（${textSourceLabel}）`;
+                                document.body.appendChild(tip);
+                                setTimeout(()=>{ if (tip.parentNode) tip.parentNode.removeChild(tip); }, 2000);
+                            } else {
+                                alert(j && j.msg ? j.msg : '获取TTS失败');
+                            }
+                        } catch(e){ console.error(e); }
+                    });
+                    rowBtnWrap.appendChild(btnPlayTTS);
                     speakerRow.appendChild(rowBtnWrap);
                     tx.appendChild(speakerRow);
                     
@@ -1388,6 +1512,7 @@ if __name__ == '__main__':
                     content.value = c.text || '';
                     content.placeholder = '原语言文本...';
                     content.style.width = '100%';
+                    content.setAttribute('data-role', `original-${idx}`);
                     content.addEventListener('input', () => { 
                         c.text = content.value; 
                         triggerAutoSave(); // 文本修改时也触发自动保存
@@ -1409,6 +1534,7 @@ if __name__ == '__main__':
                     
                     const translatedInput = document.createElement('textarea');
                     translatedInput.className = 'textEdit';
+                    translatedInput.setAttribute('data-role', `translated-${idx}`);
                     // 优先显示已加载的翻译文本，按优先级顺序
                     const selectedLang = (window.currentLang || '');
                     translatedInput.value = (selectedLang ? c['translated_text_' + selectedLang] : (c.translated_text ||
@@ -2177,6 +2303,8 @@ if __name__ == '__main__':
             videoEl.addEventListener('timeupdate', () => updateActive(Math.floor(videoEl.currentTime*1000)));
 
             const mediaInfoEl = document.getElementById('mediaInfo');
+            // 先尝试加载一次语音映射（避免首次播放拿不到voice_id）
+            loadVoiceMapping();
             fetch(`/viewer_api/${taskId}/subtitles`).then(r=>r.json()).then(data => {
                 if (data && data.code === 0) {
                     cues = data.subtitles || [];
@@ -2208,6 +2336,20 @@ if __name__ == '__main__':
                         if (data.media.video) parts.push('视频: ' + data.media.video);
                         if (!data.media.video && data.media.audio) parts.push('音频: ' + data.media.audio);
                         mediaInfoEl.textContent = parts.join('  ');
+                        // 强制校正播放器源（优先视频）
+                        try {
+                            if (data.media.video) {
+                                videoEl.src = `/${'apidata'}/${taskId}/${data.media.video}`;
+                                try { videoEl.load(); } catch(e){}
+                            } else if (data.media.audio) {
+                                videoEl.src = `/${'apidata'}/${taskId}/${data.media.audio}`;
+                                try { videoEl.load(); } catch(e){}
+                                const note = document.createElement('div');
+                                note.style.cssText = 'margin:4px 0 8px; color:#d84315; font-size:12px;';
+                                note.textContent = '当前仅检测到音频文件，无法显示画面。';
+                                mediaInfoEl.appendChild(note);
+                            }
+                        } catch(e) { console.warn('设置播放器源失败', e); }
                         if (data.media.video && data.media.unsupported_codec){
                             const warn = document.createElement('div');
                             warn.style.cssText = `margin:4px 0 8px; color:#d84315; font-size:12px;`;
@@ -3451,12 +3593,17 @@ if __name__ == '__main__':
             else:
                 srt_path = None
             
-        # 首先严格按视频扩展选择可见视频文件
-        for f in files:
-            lower = f.name.lower()
-            if any(lower.endswith('.' + e) for e in video_exts):
-                video_path = f
-                break
+        # 优先使用预生成的无音轨视频
+        vo_path = task_dir / 'video_only.mp4'
+        if vo_path.exists():
+            video_path = vo_path
+        else:
+            # 首先严格按视频扩展选择可见视频文件
+            for f in files:
+                lower = f.name.lower()
+                if any(lower.endswith('.' + e) for e in video_exts):
+                    video_path = f
+                    break
         # 如果没有视频，记录一个音频作为回退（用于仅播放声音）
         if video_path is None:
             for f in files:
@@ -5745,6 +5892,143 @@ if __name__ == '__main__':
         except Exception as e:
             print(f"音频合成失败: {str(e)}")
             return False
+
+    @app.route('/viewer_api/<task_id>/gen_tts_one', methods=['POST'])
+    def viewer_gen_tts_one(task_id):
+        data = request.get_json(silent=True) or {}
+        start_time = int(data.get('start_time', 0))
+        end_time = int(data.get('end_time', 0))
+        text = (data.get('text') or '').strip()
+        speaker = (data.get('speaker') or '').strip()
+        if end_time <= start_time or not text:
+            return jsonify({"code": 1, "msg": "参数无效"}), 400
+
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+
+        # 读取语音映射
+        mapping_file = task_dir / f"{task_id}_voice_mapping.json"
+        voice_id = None
+        model_id = None
+        voice_settings = {}
+        if mapping_file.exists():
+            try:
+                mp = json.loads(mapping_file.read_text(encoding='utf-8')).get('voice_mapping') or {}
+                if speaker in mp:
+                    v = mp[speaker]
+                    if isinstance(v, dict):
+                        voice_id = v.get('voice_id') or v.get('id') or v.get('voice')
+                        model_id = v.get('model_id') or v.get('model')
+                        voice_settings = dict(v.get('voice_settings') or {})
+                    else:
+                        voice_id = str(v)
+            except Exception:
+                pass
+        if not voice_id:
+            return jsonify({"code": 1, "msg": "未找到该说话人的 voice_id"}), 400
+
+        # 计算缓存名
+        import hashlib
+        raw_key = f"{int(start_time)}|{int(end_time)}|{voice_id}|{text}"
+        md5name = hashlib.md5(raw_key.encode('utf-8')).hexdigest()
+        cache_dir = task_dir / 'tts_cache'
+        cache_dir.mkdir(exist_ok=True)
+        out_file = cache_dir / f"{md5name}.wav"
+
+        if not out_file.exists() or out_file.stat().st_size == 0:
+            ok = generate_tts_audio(
+                text, voice_id, out_file,
+                speaking_rate=None, voice_settings=voice_settings, model_id=model_id
+            )
+            if not ok or not out_file.exists():
+                return jsonify({"code": 1, "msg": "生成TTS失败"}), 500
+
+        return jsonify({
+            "code": 0,
+            "url": f"/{API_RESOURCE}/{task_id}/tts_cache/{md5name}.wav",
+            "file": f"tts_cache/{md5name}.wav"
+        })
+
+    @app.route('/viewer_api/<task_id>/cue_audio', methods=['POST'])
+    def viewer_cue_audio(task_id):
+        """按字幕行获取/生成单段TTS并返回可播放URL。
+        入参: { index, start_time, end_time, text, speaker }
+        """
+        data = request.get_json(silent=True) or {}
+        idx = data.get('index')
+        start_time = int(data.get('start_time', 0))
+        end_time = int(data.get('end_time', 0))
+        text = (data.get('text') or '').strip()
+        speaker = (data.get('speaker') or '').strip()
+        if end_time <= start_time or not text:
+            return jsonify({"code": 1, "msg": "该行没有有效文本或时间"}), 400
+
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+
+        # 读取语音映射，解析 voice_id
+        mapping_file = task_dir / f"{task_id}_voice_mapping.json"
+        voice_id = None
+        model_id = None
+        voice_settings = {}
+        if mapping_file.exists():
+            try:
+                mp = json.loads(mapping_file.read_text(encoding='utf-8')).get('voice_mapping') or {}
+                vm = mp.get(speaker)
+                if isinstance(vm, dict):
+                    voice_id = vm.get('voice_id') or vm.get('id') or vm.get('voice')
+                    model_id = vm.get('model_id') or vm.get('model')
+                    voice_settings = dict(vm.get('voice_settings') or {})
+                elif vm:
+                    voice_id = str(vm)
+                if not voice_id:
+                    ns = speaker.strip().lower()
+                    for k, v in mp.items():
+                        if str(k).strip().lower() == ns and isinstance(v, dict) and v.get('voice_id'):
+                            voice_id = v['voice_id']
+                            model_id = v.get('model_id')
+                            voice_settings = dict(v.get('voice_settings') or {})
+                            break
+                    if not voice_id:
+                        def _strip_zero(s):
+                            s = str(s or '').strip().lower()
+                            return s.replace('spk0', 'spk')
+                        t2 = _strip_zero(speaker)
+                        for k, v in mp.items():
+                            if _strip_zero(k) == t2 and isinstance(v, dict) and v.get('voice_id'):
+                                voice_id = v['voice_id']
+                                model_id = v.get('model_id')
+                                voice_settings = dict(v.get('voice_settings') or {})
+                                break
+            except Exception:
+                pass
+        if not voice_id:
+            return jsonify({"code": 1, "msg": "未找到该说话人的 voice_id"}), 400
+
+        # 计算缓存名并命中/生成
+        import hashlib
+        raw_key = f"{int(start_time)}|{int(end_time)}|{voice_id}|{text}"
+        md5name = hashlib.md5(raw_key.encode('utf-8')).hexdigest()
+        cache_dir = task_dir / 'tts_cache'
+        cache_dir.mkdir(exist_ok=True)
+        out_file = cache_dir / f"{md5name}.wav"
+
+        if not out_file.exists() or out_file.stat().st_size == 0:
+            ok = generate_tts_audio(
+                text, voice_id, out_file,
+                speaking_rate=None, voice_settings=voice_settings, model_id=model_id
+            )
+            if not ok or not out_file.exists():
+                return jsonify({"code": 1, "msg": "生成TTS失败"}), 500
+
+        return jsonify({
+            "code": 0,
+            "url": f"/{API_RESOURCE}/{task_id}/tts_cache/{md5name}.wav",
+            "file": f"tts_cache/{md5name}.wav",
+            "index": idx
+        })
 
     def start_video_synthesis_task(task_id, video_path, subtitles):
         """启动视频合成任务的后台处理函数
