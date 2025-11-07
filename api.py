@@ -502,6 +502,22 @@ if __name__ == '__main__':
                     return true;
                 } catch (e) { errEl.style.display = 'block'; errEl.textContent = String(e); return true; }
             }
+            window.setupLangSwitcher = function setupLangSwitcher(){
+                if (!langSwitcher) return;
+                if (!availableLangs || availableLangs.length === 0){
+                    langSwitcher.style.display = 'none';
+                    currentLang = '';
+                    return;
+                }
+                langSwitcher.innerHTML = '<option value="">原文/默认</option>' + availableLangs.map(function(l){return '<option value="'+l+'">'+l+'</option>';}).join('');
+                langSwitcher.style.display = 'inline-block';
+                if (currentLang && availableLangs.indexOf(currentLang) === -1) currentLang = '';
+                langSwitcher.value = currentLang || '';
+                langSwitcher.onchange = function(){
+                    currentLang = langSwitcher.value;
+                    renderList();
+                };
+            }
             (async () => {
                 const done = await query();
                 if (!done) return;
@@ -886,7 +902,10 @@ if __name__ == '__main__':
             <div class=\"container\"> 
                 <div>
                     <div class=\"list-tools\" style=\"display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;\">
-                        <div style=\"font-size:12px; color:#666;\">字幕列表</div>
+                        <div style=\"font-size:12px; color:#666; display:flex; align-items:center; gap:8px;\">
+                            <span>字幕列表</span>
+                            <select id=\"langSwitcher\" style=\"padding:4px 6px; font-size:12px; display:none;\"></select>
+                        </div>
                         <div>
                             <button id=\"btnEditSpeaker\" style=\"padding:4px 8px; font-size:12px; border:1px solid #666; background:#fff; border-radius:6px; cursor:pointer; margin-right: 4px;\">编辑说话人</button>
                             <button id=\"btnAddSpeakerOption\" style=\"padding:4px 8px; font-size:12px; border:1px solid #666; background:#fff; border-radius:6px; cursor:pointer;\">增加说话人选项</button>
@@ -904,7 +923,8 @@ if __name__ == '__main__':
                                 <span id=\"saveStatus\" style=\"color: #28a745;\">已保存</span> | 
                                 快捷键: R=重置 F=适应 ←→=平移 | 拖拽空白区域滑动
                             </div>
-                            <div id=\"speakerLegend\" style=\"display: flex; gap: 8px; font-size: 11px;\"></div>
+                            <!-- 说话人颜色图例已移除 -->
+                            <div id=\"speakerLegend\" style=\"display:none;\"></div>
                             <div>
                                 <button id=\"zoomIn\" style=\"padding: 2px 8px; margin-right: 4px; font-size: 12px;\">放大</button>
                                 <button id=\"zoomOut\" style=\"padding: 2px 8px; margin-right: 4px; font-size: 12px;\">缩小</button>
@@ -946,7 +966,7 @@ if __name__ == '__main__':
             const zoomLevelEl = document.getElementById('zoomLevel');
             const visibleRangeEl = document.getElementById('visibleRange');
             const saveStatusEl = document.getElementById('saveStatus');
-            const speakerLegendEl = document.getElementById('speakerLegend');
+            const speakerLegendEl = document.getElementById('speakerLegend'); // 图例已隐藏
             const zoomInBtn = document.getElementById('zoomIn');
             const zoomOutBtn = document.getElementById('zoomOut');
             const zoomResetBtn = document.getElementById('zoomReset');
@@ -958,6 +978,28 @@ if __name__ == '__main__':
             let speakers = [];
             let speakerColors = {}; // 存储说话人对应的颜色
             const originalVideoUrl = '((VIDEO_URL))';
+            // 语言切换全局挂载，确保任何时机可用
+            window.langSwitcher = document.getElementById('langSwitcher');
+            if (!window.availableLangs) window.availableLangs = [];
+            if (!window.currentLang) window.currentLang = '';
+            window.setupLangSwitcher = function setupLangSwitcher(){
+                var sel = window.langSwitcher;
+                var langs = window.availableLangs || [];
+                if (!sel) return;
+                if (!langs || langs.length === 0){
+                    sel.style.display = 'none';
+                    window.currentLang = '';
+                    return;
+                }
+                sel.innerHTML = '<option value="">原文/默认</option>' + langs.map(function(l){return '<option value="'+l+'">'+l+'</option>';}).join('');
+                sel.style.display = 'inline-block';
+                if (window.currentLang && langs.indexOf(window.currentLang) === -1) window.currentLang = '';
+                sel.value = window.currentLang || '';
+                sel.onchange = function(){
+                    window.currentLang = sel.value || '';
+                    if (typeof window.renderList === 'function') window.renderList();
+                };
+            };
 
             function showSynthModal(msg) {
                 synthModalMsg.textContent = msg || '请稍候...';
@@ -1245,18 +1287,21 @@ if __name__ == '__main__':
                     const translatedInput = document.createElement('textarea');
                     translatedInput.className = 'textEdit';
                     // 优先显示已加载的翻译文本，按优先级顺序
-                    translatedInput.value = c.translated_text || 
+                    const selectedLang = (window.currentLang || '');
+                    translatedInput.value = (selectedLang ? c['translated_text_' + selectedLang] : (c.translated_text ||
                                           c.translated_text_en || 
                                           c.translated_text_es || 
                                           c.translated_text_fr || 
                                           c.translated_text_ja || 
                                           c.translated_text_zh || 
                                           c.translated_text_pt || 
-                                          c.translated_text_th || '';
+                                          c.translated_text_th)) || '';
                     translatedInput.placeholder = '翻译文本...';
                     translatedInput.style.width = '100%';
                     translatedInput.addEventListener('input', () => { 
-                        c.translated_text = translatedInput.value; 
+                        const selLang = (window.currentLang || '');
+                        if (selLang) { c['translated_text_' + selLang] = translatedInput.value; }
+                        else { c.translated_text = translatedInput.value; }
                         // 取消自动保存翻译文本，请使用“保存翻译”按钮
                     });
                     
@@ -1303,34 +1348,8 @@ if __name__ == '__main__':
             let zoomLevel = 1;
             let panOffset = 0; // 水平偏移
 
-            // 更新说话人图例
-            function updateSpeakerLegend() {
-                speakerLegendEl.innerHTML = '';
-                const uniqueSpeakers = [...new Set(cues.map(c => c.speaker).filter(s => s && s.trim()))];
-                
-                uniqueSpeakers.forEach(speaker => {
-                    const color = assignSpeakerColor(speaker);
-                    const legendItem = document.createElement('div');
-                    legendItem.style.display = 'flex';
-                    legendItem.style.alignItems = 'center';
-                    legendItem.style.gap = '4px';
-                    
-                    const colorBox = document.createElement('div');
-                    colorBox.style.width = '12px';
-                    colorBox.style.height = '12px';
-                    colorBox.style.backgroundColor = color;
-                    colorBox.style.borderRadius = '2px';
-                    colorBox.style.border = '1px solid #ccc';
-                    
-                    const speakerLabel = document.createElement('span');
-                    speakerLabel.textContent = speaker;
-                    speakerLabel.style.color = '#666';
-                    
-                    legendItem.appendChild(colorBox);
-                    legendItem.appendChild(speakerLabel);
-                    speakerLegendEl.appendChild(legendItem);
-                });
-            }
+            // 更新说话人图例（已禁用）
+            function updateSpeakerLegend() { /* no-op: legend removed */ }
 
             // 更新缩放和平移显示
             function updateZoomDisplay() {
@@ -2039,7 +2058,26 @@ if __name__ == '__main__':
                     cues = data.subtitles || [];
                     videoMs = data.video_ms || (cues.length? cues[cues.length-1].end : 0);
                     speakers = (data.speakers || []).filter(Boolean);
-                    const translationFiles = data.translation_files || [];
+                let translationFiles = data.translation_files || [];
+                // 后备：如果后端未返回，但前端字幕含有 translated_text_xx 字段，则推断可用语言
+                if ((!translationFiles || translationFiles.length === 0) && Array.isArray(cues) && cues.length > 0) {
+                    const langSet = new Set();
+                    const re = /^translated_text_([a-zA-Z\-]+)$/;
+                    cues.forEach(function(c){
+                        Object.keys(c || {}).forEach(function(k){
+                            const m = re.exec(k);
+                            if (m && c[k]) langSet.add(m[1]);
+                        });
+                    });
+                    translationFiles = Array.from(langSet);
+                }
+                window.availableLangs = translationFiles;
+                if (typeof window.setupLangSwitcher === 'function') {
+                    window.setupLangSwitcher();
+                } else {
+                    document.addEventListener('DOMContentLoaded', function(){ if (typeof window.setupLangSwitcher === 'function') window.setupLangSwitcher(); });
+                    setTimeout(function(){ if (typeof window.setupLangSwitcher === 'function') window.setupLangSwitcher(); }, 0);
+                }
                     
                     renderList();
                     drawTimeline(0);
@@ -2522,7 +2560,37 @@ if __name__ == '__main__':
                                             btnSynthesizeAudio.style.display = 'inline-block';
                                         }
                                     });
-                                    alert(`翻译完成！已生成翻译文件：${data.srt_file}。您可以编辑翻译结果，修改会自动保存。`);
+                                    // 翻译完成后，立即调用保存API，确保刷新后可恢复
+                                    try {
+                                        const savePayload = {
+                                            target_language: (window.currentTargetLanguage || 'zh'),
+                                            subtitles: cues.map(function(c, index){
+                                                return {
+                                                    line: index + 1,
+                                                    start_time: Number(c.start) || 0,
+                                                    end_time: Number(c.end) || 0,
+                                                    startraw: c.startraw || '',
+                                                    endraw: c.endraw || '',
+                                                    time: (String(c.startraw || '') + ' --> ' + String(c.endraw || '')),
+                                                    text: String(c.text || '').trim(),
+                                                    translated_text: String(c.translated_text || '').trim(),
+                                                    speaker: String(c.speaker || '').trim()
+                                                };
+                                            })
+                                        };
+                                        const saveRes = await fetch(`/viewer_api/${taskId}/save_translation`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify(savePayload)
+                                        });
+                                        const saveJson = await saveRes.json().catch(()=>null);
+                                        if (!(saveJson && saveJson.code === 0)) {
+                                            console.warn('自动保存翻译失败', saveJson);
+                                        }
+                                    } catch (err) {
+                                        console.warn('自动保存翻译异常', err);
+                                    }
+                                    alert(`翻译完成！已生成并保存翻译文件：${data.srt_file}。`);
                                 } else {
                                     alert('翻译失败：没有返回翻译结果');
                                 }
@@ -2564,7 +2632,10 @@ if __name__ == '__main__':
                     btnSaveTranslation.disabled = true;
                     
                     // 准备保存数据
+                    // 需要保存的目标语言，如果之前翻译时记录了则复用
+                    const targetLang = (window.currentTargetLanguage || 'zh');
                     const saveData = {
+                        target_language: targetLang,
                         subtitles: cues.map((c, index) => ({
                             line: index + 1,
                             start_time: Number(c.start) || 0,
