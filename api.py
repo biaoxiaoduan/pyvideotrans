@@ -1016,8 +1016,8 @@ if __name__ == '__main__':
               <div class="modal">
                 <h4>添加字幕到视频</h4>
                 <div style="text-align:left;font-size:13px;line-height:1.9;">
-                  <label><input type="radio" name="addTarget" value="original" checked> 原视频（初始载入的）</label><br>
-                  <label><input type="radio" name="addTarget" value="current"> 当前播放视频（可能是合成结果）</label>
+                  <label><input type="radio" name="addTarget" value="original"> 原视频（初始载入的）</label><br>
+                  <label><input type="radio" name="addTarget" value="current" checked> 当前播放视频（可能是合成结果）</label>
                 </div>
                 <div style="display:flex;gap:8px;justify-content:center;margin-top:8px;flex-wrap:wrap;">
                   <div>
@@ -1068,7 +1068,7 @@ if __name__ == '__main__':
             addSubModal.querySelector('#btnSubCancel').addEventListener('click', hideAddSubModal);
             addSubModal.querySelector('#btnSubOk').addEventListener('click', async () => {
                 try {
-                    const target = (addSubModal.querySelector('input[name="addTarget"]:checked')||{}).value || 'original';
+                  const target = (addSubModal.querySelector('input[name="addTarget"]:checked')||{}).value || 'current';
                     const fontSize = Number(document.getElementById('subFontSize').value) || 72;
                     const bottomPercent = Number(document.getElementById('subBottomPct').value) || 20;
                     const videoUrl = target === 'original' ? originalVideoUrl : (videoEl.currentSrc || videoEl.src);
