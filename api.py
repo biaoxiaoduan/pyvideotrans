@@ -1112,6 +1112,7 @@ if __name__ == '__main__':
             });
 
             function fmtMs(ms) {
+                ms = Math.max(0, Math.floor(Number(ms) || 0));
                 const s = Math.floor(ms/1000); const hh = String(Math.floor(s/3600)).padStart(2,'0');
                 const mm = String(Math.floor((s%3600)/60)).padStart(2,'0');
                 const ss = String(s%60).padStart(2,'0');
@@ -3880,7 +3881,7 @@ if __name__ == '__main__':
                         voice_clones.append(voice_clone_info)
                         voice_mapping[speaker] = {
                             "voice_id": clone_result.get('voice_id'),
-                            "model_id": config.params.get('elevenlabstts_models') or "eleven_flash_v2_5"
+                            "model_id": config.params.get('elevenlabstts_models') or "eleven_v3"
                         }
                         print(f"说话人 '{speaker}' 语音克隆成功，voice_id: {clone_result.get('voice_id')}")
                     else:
@@ -5101,7 +5102,7 @@ if __name__ == '__main__':
             kwargs = {
                 'voice_id': voice_id,
                 'text': text,
-                'model_id': model_id or config.params.get('elevenlabstts_models') or "eleven_flash_v2_5"
+                'model_id': model_id or config.params.get('elevenlabstts_models') or "eleven_v3"
             }
             voice_settings_payload = {}
 
