@@ -445,6 +445,53 @@ if __name__ == '__main__':
         # 启动后台任务重命名SRT文件
         import threading
         threading.Thread(target=rename_srt_to_raw, args=(obj['uuid'],), daemon=True).start()
+
+        # 在识别阶段提前提取音频并进行人声/背景分离，结果保存在项目目录
+        def pre_extract_and_separate(task_id, src_video):
+            try:
+                task_dir = Path(TARGET_DIR) / task_id
+                task_dir.mkdir(parents=True, exist_ok=True)
+                audio_full = task_dir / 'audio_full.wav'
+                vocals_path = task_dir / 'audio_vocals.wav'
+                bg_path = task_dir / 'audio_bg.wav'
+
+                # 如已存在则跳过
+                if not audio_full.exists():
+                    try:
+                        tools.conver_to_16k(str(src_video), str(audio_full))
+                    except Exception:
+                        # 备用：直接提取原采样率音频
+                        from videotrans.util import help_ffmpeg as _ff
+                        _ = _ffmpeg = None
+                        try:
+                            _ = _ff
+                        except Exception:
+                            pass
+                # 进行人声分离（若尚未生成）
+                if not (vocals_path.exists() and bg_path.exists()):
+                    try:
+                        cache_dir = Path(config.TEMP_DIR) / f"{task_id}_presep"
+                        cache_dir.mkdir(parents=True, exist_ok=True)
+                        # 使用现有的 Demucs 分离实现
+                        ok = separate_voice_background_demucs(str(audio_full), str(cache_dir))
+                        if ok:
+                            # 约定输出文件名 background.wav / vocal.wav
+                            bg_src = cache_dir / 'background.wav'
+                            vc_src = cache_dir / 'vocal.wav'
+                            if vc_src.exists():
+                                vc_src.replace(vocals_path)
+                            if bg_src.exists():
+                                bg_src.replace(bg_path)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # 后台启动预处理（不阻塞跳转）
+        try:
+            threading.Thread(target=pre_extract_and_separate, args=(obj['uuid'], tmp_path), daemon=True).start()
+        except Exception:
+            pass
         
         # 跳转到结果页（完成后再跳转到 /view/<task_id> 进行编辑）
         return redirect(url_for('funasr_result', task_id=obj['uuid']))
@@ -477,12 +524,14 @@ if __name__ == '__main__':
                 <div id=\"status\">查询中...</div>
                 <div class=\"files\" id=\"files\"></div>
                 <pre id=\"error\" style=\"display:none\"></pre>
+                <div id=\"preproc\" style=\"margin-top:10px;font-size:13px;color:#555;\">音频预处理：正在提取/分离人声...</div>
             </main>
             <script>
             const taskId = ((TASK_ID_JSON));
             const statusEl = document.getElementById('status');
             const filesEl = document.getElementById('files');
             const errEl = document.getElementById('error');
+            const preprocEl = document.getElementById('preproc');
 
             async function query() {
                 try {
@@ -502,6 +551,26 @@ if __name__ == '__main__':
                     return true;
                 } catch (e) { errEl.style.display = 'block'; errEl.textContent = String(e); return true; }
             }
+            async function checkPreprocess(){
+                if (!preprocEl) return;
+                try {
+                    const head1 = await fetch(`/apidata/${taskId}/audio_vocals.wav`, { method: 'HEAD' });
+                    const head2 = await fetch(`/apidata/${taskId}/audio_bg.wav`, { method: 'HEAD' });
+                    if (head1.ok && head2.ok){
+                        preprocEl.textContent = '音频预处理：已完成（人声/背景已分离，可直接用于合成）';
+                        preprocEl.style.color = '#28a745';
+                        return true;
+                    }
+                } catch(e){}
+                preprocEl.textContent = '音频预处理：进行中...';
+                preprocEl.style.color = '#555';
+                return false;
+            }
+            // 定时检查预处理状态
+            (function(){
+                checkPreprocess();
+                const t = setInterval(async ()=>{ const done = await checkPreprocess(); if (done) clearInterval(t); }, 3000);
+            })();
             window.setupLangSwitcher = function setupLangSwitcher(){
                 if (!langSwitcher) return;
                 if (!availableLangs || availableLangs.length === 0){
@@ -659,6 +728,30 @@ if __name__ == '__main__':
             }
         })
 
+    @app.route('/viewer_api/<task_id>/transcode_h264', methods=['POST'])
+    def viewer_transcode_h264(task_id):
+        """将任务目录中的视频转码为 H.264 + AAC 的 MP4，并返回新的播放地址。"""
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+        from videotrans.configure import config as _cfg
+        video_exts = [e.lower() for e in _cfg.VIDEO_EXTS]
+        src = None
+        for f in task_dir.iterdir():
+            if f.is_file() and any(f.name.lower().endswith('.'+e) for e in video_exts):
+                src = f
+                break
+        if not src:
+            return jsonify({"code": 1, "msg": "未找到可转码的视频文件"}), 400
+        out = task_dir / 'converted_h264.mp4'
+        try:
+            import subprocess, shlex
+            cmd = f"ffmpeg -y -i {shlex.quote(src.as_posix())} -c:v libx264 -preset veryfast -crf 23 -c:a aac -movflags +faststart {shlex.quote(out.as_posix())}"
+            subprocess.run(cmd, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"转码失败: {e}"}), 500
+        return jsonify({"code": 0, "msg": "转码成功", "output_url": f"/{API_RESOURCE}/{task_id}/converted_h264.mp4"})
+
     @app.route('/upload_viewer', methods=['POST'])
     def upload_viewer():
         from uuid import uuid4
@@ -712,7 +805,7 @@ if __name__ == '__main__':
         all_files = [f.name for f in task_dir.iterdir() if f.is_file()]
         # 允许的播放文件后缀
         from videotrans.configure import config as _cfg
-        exts = set([e.lower() for e in _cfg.VIDEO_EXTS + _cfg.AUDIO_EXITS])
+        exts = set([e.lower() for e in _cfg.VIDEO_EXTS])
         video_name = ''
         srt_name = ''
         for name in all_files:
@@ -914,6 +1007,7 @@ if __name__ == '__main__':
                     <div class=\"list\" id=\"subList\"></div>
                 </div>
                 <div class=\"player\"> 
+                    <div id=\"mediaInfo\" style=\"font-size:12px;color:#666;margin-bottom:4px;\"></div>
                     <video id=\"video\" src=\"((VIDEO_URL))\" controls crossorigin=\"anonymous\" style=\"width:100%;max-height:60vh;background:#000\"></video>
                     <div class=\"timeline-wrap\" style=\"position: relative;\">
                         <div style=\"display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;\">
@@ -983,6 +1077,7 @@ if __name__ == '__main__':
             if (!window.availableLangs) window.availableLangs = [];
             if (!window.currentLang) window.currentLang = '';
             window.setupLangSwitcher = function setupLangSwitcher(){
+                if (!window.langSwitcher) window.langSwitcher = document.getElementById('langSwitcher');
                 var sel = window.langSwitcher;
                 var langs = window.availableLangs || [];
                 if (!sel) return;
@@ -2054,6 +2149,7 @@ if __name__ == '__main__':
 
             videoEl.addEventListener('timeupdate', () => updateActive(Math.floor(videoEl.currentTime*1000)));
 
+            const mediaInfoEl = document.getElementById('mediaInfo');
             fetch(`/viewer_api/${taskId}/subtitles`).then(r=>r.json()).then(data => {
                 if (data && data.code === 0) {
                     cues = data.subtitles || [];
@@ -2079,6 +2175,35 @@ if __name__ == '__main__':
                     document.addEventListener('DOMContentLoaded', function(){ if (typeof window.setupLangSwitcher === 'function') window.setupLangSwitcher(); });
                     setTimeout(function(){ if (typeof window.setupLangSwitcher === 'function') window.setupLangSwitcher(); }, 0);
                 }
+                    // 显示当前媒体源信息，并提示不被浏览器支持的编码
+                    if (data.media && mediaInfoEl){
+                        const parts = [];
+                        if (data.media.video) parts.push('视频: ' + data.media.video);
+                        if (!data.media.video && data.media.audio) parts.push('音频: ' + data.media.audio);
+                        mediaInfoEl.textContent = parts.join('  ');
+                        if (data.media.video && data.media.unsupported_codec){
+                            const warn = document.createElement('div');
+                            warn.style.cssText = `margin:4px 0 8px; color:#d84315; font-size:12px;`;
+                            warn.innerHTML = '提示：该视频编码浏览器可能不支持（如 HEVC/H.265）。可尝试转码为 H.264。 <button id="btnTranscode" style="margin-left:8px;padding:2px 8px;font-size:12px;">一键转码</button>';
+                            mediaInfoEl.appendChild(warn);
+                            const btn = document.getElementById('btnTranscode');
+                            if (btn) {
+                                btn.addEventListener('click', async ()=>{
+                                    btn.disabled = true; btn.textContent = '转码中...';
+                                    try{
+                                        const r = await fetch(`/viewer_api/${taskId}/transcode_h264`, {method:'POST'});
+                                        const j = await r.json();
+                                        if (j && j.code === 0 && j.output_url){
+                                            videoEl.src = j.output_url; try{videoEl.load(); videoEl.play();}catch(e){}
+                                            btn.textContent = '已转码并切换';
+                                        } else {
+                                            btn.textContent = '转码失败'; btn.disabled = false;
+                                        }
+                                    }catch(e){ btn.textContent = '转码失败'; btn.disabled = false; }
+                                });
+                            }
+                        }
+                    }
                     
                     renderList();
                     drawTimeline(0);
@@ -2103,6 +2228,25 @@ if __name__ == '__main__':
                             }
                         }, 3000);
                     }
+
+                    // 检测是否已有预分离音频，若有则提示将被复用
+                    (async function(){
+                        try {
+                            const head1 = await fetch(`/apidata/${taskId}/audio_vocals.wav`, { method: 'HEAD' });
+                            const head2 = await fetch(`/apidata/${taskId}/audio_bg.wav`, { method: 'HEAD' });
+                            if (head1.ok || head2.ok) {
+                                const tip = document.createElement('div');
+                                tip.style.cssText = `
+                                    position: fixed; top: 60px; right: 20px; z-index: 1000;
+                                    background: #17a2b8; color: white; padding: 10px 15px;
+                                    border-radius: 5px; font-size: 14px; box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+                                `;
+                                tip.textContent = 'ℹ️ 已检测到预分离音频，合成将直接复用';
+                                document.body.appendChild(tip);
+                                setTimeout(()=> { if (tip.parentNode) tip.parentNode.removeChild(tip); }, 3000);
+                            }
+                        } catch(e) { /* 忽略 */ }
+                    })();
                 }
             });
 
@@ -3258,8 +3402,10 @@ if __name__ == '__main__':
         files = [f for f in task_dir.iterdir() if f.is_file()]
         srt_path = None
         video_path = None
+        audio_fallback = None
         from videotrans.configure import config as _cfg
-        exts = set([e.lower() for e in _cfg.VIDEO_EXTS + _cfg.AUDIO_EXITS])
+        video_exts = [e.lower() for e in _cfg.VIDEO_EXTS]
+        audio_exts = [e.lower() for e in _cfg.AUDIO_EXITS]
         
         # 优先选择raw.srt文件
         srt_files = [f for f in files if f.name.lower().endswith('.srt')]
@@ -3278,13 +3424,21 @@ if __name__ == '__main__':
             else:
                 srt_path = None
             
+        # 首先严格按视频扩展选择可见视频文件
         for f in files:
             lower = f.name.lower()
-            if any(lower.endswith('.' + e) for e in exts):
-                if video_path is None:
-                    video_path = f
-        if not srt_path or not video_path:
-            return jsonify({"code": 1, "msg": "任务文件缺失（需要视频与srt）"}), 400
+            if any(lower.endswith('.' + e) for e in video_exts):
+                video_path = f
+                break
+        # 如果没有视频，记录一个音频作为回退（用于仅播放声音）
+        if video_path is None:
+            for f in files:
+                lower = f.name.lower()
+                if any(lower.endswith('.' + e) for e in audio_exts):
+                    audio_fallback = f
+                    break
+        if not srt_path or (video_path is None and audio_fallback is None):
+            return jsonify({"code": 1, "msg": "任务文件缺失（需要视频或音频与srt）"}), 400
 
         # 解析字幕（保持原有逻辑不变）
         print(f"开始解析SRT文件: {srt_path}")
@@ -3343,8 +3497,27 @@ if __name__ == '__main__':
                         break
 
         # 视频总时长（毫秒）
+        # 检测视频编码是否浏览器常见可播放（简单规则：h264/avc 友好；hevc/h265 多数浏览器不支持）
+        unsupported_codec = False
         try:
-            video_ms = int(help_ffmpeg.get_video_duration(video_path.as_posix()) or 0)
+            src = (video_path or audio_fallback)
+            video_ms = int(help_ffmpeg.get_video_duration(src.as_posix()) or 0)
+            if video_path is not None:
+                try:
+                    # help_ffmpeg 可能包含探测函数；如果没有，退回到粗略字符串判断
+                    from videotrans.util import help_ffmpeg as _ff
+                    codec = ''
+                    if hasattr(_ff, 'get_video_codec'):
+                        codec = (_ff.get_video_codec(video_path.as_posix()) or '').lower()
+                    else:
+                        # 粗略判断：文件名或路径包含 hevc/h265
+                        name = video_path.name.lower()
+                        if 'hevc' in name or 'h265' in name:
+                            codec = 'hevc'
+                    if codec and ('hevc' in codec or 'h265' in codec or 'mpeg-2' in codec or 'mpeg2' in codec):
+                        unsupported_codec = True
+                except Exception:
+                    pass
         except Exception:
             video_ms = parsed[-1]['end'] if parsed else 0
 
@@ -3358,7 +3531,12 @@ if __name__ == '__main__':
             "subtitles": parsed, 
             "video_ms": video_ms, 
             "speakers": sorted(list(spk_set)),
-            "translation_files": list(translation_files.keys())
+            "translation_files": list(translation_files.keys()),
+            "media": {
+                "video": video_path.name if video_path else "",
+                "audio": audio_fallback.name if audio_fallback else "",
+                "unsupported_codec": unsupported_codec
+            }
         })
 
     @app.route('/viewer_api/<task_id>/export_srt', methods=['POST'])
@@ -5959,13 +6137,36 @@ if __name__ == '__main__':
             audio_path = cache_dir / "extracted_audio.wav"
             tools.conver_to_16k(video_path, str(audio_path))
             
-            # 2. 人声分离 - 使用Demucs分离人声和背景音乐
+            # 2. 人声分离 - 使用Demucs分离人声和背景音乐（如任务目录已有预分离结果则直接复用）
             bgm_path = cache_dir / "background.wav"  # 背景音乐
             vocal_path = cache_dir / "vocal.wav"     # 原人声
-            
+
             try:
-                print(f"开始人声分离（使用Demucs）...")
-                success = separate_voice_background_demucs(str(audio_path), str(cache_dir))
+                # 复用在识别阶段预先生成的分离文件
+                pre_vocals = (Path(TARGET_DIR) / task_id / 'audio_vocals.wav')
+                pre_bg = (Path(TARGET_DIR) / task_id / 'audio_bg.wav')
+                reused = False
+                if pre_vocals.exists():
+                    try:
+                        import shutil
+                        shutil.copy2(pre_vocals.as_posix(), vocal_path.as_posix())
+                        reused = True
+                    except Exception:
+                        pass
+                if pre_bg.exists():
+                    try:
+                        import shutil
+                        shutil.copy2(pre_bg.as_posix(), bgm_path.as_posix())
+                        reused = True
+                    except Exception:
+                        pass
+
+                if reused:
+                    print("已复用预分离的人声/背景音频")
+                    success = True
+                else:
+                    print(f"开始人声分离（使用Demucs）...")
+                    success = separate_voice_background_demucs(str(audio_path), str(cache_dir))
                 
                 if success and bgm_path.exists():
                     print("Demucs人声分离成功")
