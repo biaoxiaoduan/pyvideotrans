@@ -2336,19 +2336,41 @@ if __name__ == '__main__':
                         if (data.media.video) parts.push('视频: ' + data.media.video);
                         if (!data.media.video && data.media.audio) parts.push('音频: ' + data.media.audio);
                         mediaInfoEl.textContent = parts.join('  ');
-                        // 强制校正播放器源（优先视频）
+                        // 稳定方案：先向后端请求 upload_*.mp4 列表并优先使用其一
                         try {
-                            if (data.media.video) {
-                                videoEl.src = `/${'apidata'}/${taskId}/${data.media.video}`;
-                                try { videoEl.load(); } catch(e){}
-                            } else if (data.media.audio) {
-                                videoEl.src = `/${'apidata'}/${taskId}/${data.media.audio}`;
-                                try { videoEl.load(); } catch(e){}
-                                const note = document.createElement('div');
-                                note.style.cssText = 'margin:4px 0 8px; color:#d84315; font-size:12px;';
-                                note.textContent = '当前仅检测到音频文件，无法显示画面。';
-                                mediaInfoEl.appendChild(note);
-                            }
+                            const trySetSrc = async () => {
+                                let chosen = '';
+                                try {
+                                    const lr = await fetch(`/viewer_api/${taskId}/list_upload_videos`);
+                                    const lj = await lr.json();
+                                    if (lj && lj.code === 0 && Array.isArray(lj.files) && lj.files.length > 0) {
+                                        chosen = `/${'apidata'}/${taskId}/${lj.files[0]}`;
+                                    }
+                                } catch (e) { /* ignore */ }
+                                // 若无上传视频，再按回退优先级选择
+                                if (!chosen) {
+                                    const candidates = [];
+                                    candidates.push(`/${'apidata'}/${taskId}/converted_h264.mp4`);
+                                    if (data.media.video) candidates.push(`/${'apidata'}/${taskId}/${data.media.video}`);
+                                    if (data.media.audio) candidates.push(`/${'apidata'}/${taskId}/${data.media.audio}`);
+                                    for (const url of candidates) {
+                                        try { const res = await fetch(url, {method:'HEAD'}); if (res.ok) { chosen = url; break; } } catch(e){}
+                                    }
+                                }
+                                if (chosen) {
+                                    videoEl.src = chosen; try { videoEl.load(); } catch(e){}
+                                    if (/\.(wav|mp3|m4a)$/i.test(chosen)) {
+                                        const note = document.createElement('div');
+                                        note.style.cssText = 'margin:4px 0 8px; color:#d84315; font-size:12px;';
+                                        note.textContent = '当前仅检测到音频文件，无法显示画面。';
+                                        mediaInfoEl.appendChild(note);
+                                    }
+                                    console.log('[media] chosen source =', chosen);
+                                } else {
+                                    console.warn('未找到可用媒体源，保持默认');
+                                }
+                            };
+                            trySetSrc();
                         } catch(e) { console.warn('设置播放器源失败', e); }
                         if (data.media.video && data.media.unsupported_codec){
                             const warn = document.createElement('div');
@@ -5949,6 +5971,25 @@ if __name__ == '__main__':
             "url": f"/{API_RESOURCE}/{task_id}/tts_cache/{md5name}.wav",
             "file": f"tts_cache/{md5name}.wav"
         })
+
+    @app.route('/viewer_api/<task_id>/list_upload_videos', methods=['GET'])
+    def viewer_list_upload_videos(task_id):
+        """列出任务目录下以 upload_ 开头且 .mp4 结尾的有声视频文件名，按名称排序返回。"""
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+        try:
+            files = []
+            for f in task_dir.iterdir():
+                if f.is_file():
+                    name = f.name
+                    low = name.lower()
+                    if low.startswith('upload_') and low.endswith('.mp4'):
+                        files.append(name)
+            files.sort()
+            return jsonify({"code": 0, "files": files})
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"读取失败: {e}"}), 500
 
     @app.route('/viewer_api/<task_id>/cue_audio', methods=['POST'])
     def viewer_cue_audio(task_id):
