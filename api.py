@@ -5940,8 +5940,8 @@ if __name__ == '__main__':
                         end_sec = max(start_sec, ge)
                         gap_dur = end_sec - start_sec
                         if gap_dur > 1.0:
-                            start_sec = start_sec + 0.200
-                            end_sec = end_sec - 0.200
+                            start_sec = start_sec + 0.500
+                            end_sec = end_sec - 0.500
                             if end_sec <= start_sec:
                                 continue
                         # 追加人声源输入
