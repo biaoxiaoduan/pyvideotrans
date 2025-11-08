@@ -4355,7 +4355,10 @@ if __name__ == '__main__':
             return jsonify({"code": 1, "msg": f"语音克隆失败: {str(e)}"}), 500
 
     def extract_speaker_audio(task_dir, speaker, speaker_segments):
-        """提取指定说话人的音频片段 - 新流程：先切分再Demucs"""
+        """提取指定说话人的音频片段。
+        变更：不再使用 Demucs。直接使用 task 目录中的 audio_vocals.wav 作为已分离好的人声源，
+        按说话人片段切分并合并生成每个说话人的音频。
+        """
         try:
             from videotrans.util import tools
             
@@ -4363,16 +4366,18 @@ if __name__ == '__main__':
             speaker_dir = task_dir / "speaker_audio"
             speaker_dir.mkdir(exist_ok=True)
             
-            # 获取视频文件路径
-            video_files = list(task_dir.glob("*.mp4")) + list(task_dir.glob("*.avi")) + list(task_dir.glob("*.mov"))
-            if not video_files:
-                print("未找到视频文件")
+            # 优先使用已分离好的人声文件 audio_vocals.wav
+            vocals_path = task_dir / "audio_vocals.wav"
+            if not vocals_path.exists():
+                # 兜底：尝试常见的人声音频命名
+                candidates = list(task_dir.glob("*vocals*.wav")) + list(task_dir.glob("*vocal*.wav"))
+                vocals_path = candidates[0] if candidates else vocals_path
+            if not vocals_path.exists():
+                print("未找到已分离人声文件 audio_vocals.wav")
                 return None
+            print(f"使用人声文件: {vocals_path}")
             
-            video_path = video_files[0]
-            print(f"使用视频文件: {video_path}")
-            
-            # 第一步：根据SRT时间和说话人切分音频，生成 _spk[i] 文件
+            # 第一步：根据SRT时间和说话人切分人声音频，生成 _spk[i] 文件
             speaker_audio_path = speaker_dir / f"spk{speaker.replace('spk', '')}.wav"
             if not speaker_audio_path.exists():
                 print(f"正在切分说话人 '{speaker}' 的音频片段...")
@@ -4393,9 +4398,9 @@ if __name__ == '__main__':
                     if duration > 0:
                         segment_file = speaker_dir / f"{speaker}_segment_{i}.wav"
                         tools.runffmpeg([
-                            '-y', '-i', str(video_path),
+                            '-y', '-i', str(vocals_path),
                             '-ss', str(start_time), '-t', str(duration),
-                            '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
+                            '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
                             str(segment_file)
                         ])
                         segment_files.append(str(segment_file))
@@ -4422,34 +4427,9 @@ if __name__ == '__main__':
                 else:
                     print(f"说话人 '{speaker}' 没有有效的音频片段")
                     return None
-            
-            # 第二步：对 _spk[i] 文件用Demucs去背景音，生成 _vocal_spk[i] 文件
-            vocal_audio_path = speaker_dir / f"vocal_spk{speaker.replace('spk', '')}.wav"
-            if not vocal_audio_path.exists():
-                print(f"正在使用Demucs分离人声: {vocal_audio_path}")
-                
-                # 使用Demucs分离人声
-                success = separate_voice_background_demucs(str(speaker_audio_path), str(speaker_dir))
-                
-                if success:
-                    # Demucs生成的文件名是background.wav和vocal.wav
-                    demucs_vocal_path = speaker_dir / "vocal.wav"
-                    if demucs_vocal_path.exists():
-                        # 复制到我们期望的文件名 _vocal_spk[i]
-                        import shutil
-                        shutil.copy2(demucs_vocal_path, vocal_audio_path)
-                        print(f"Demucs人声分离成功: {vocal_audio_path}")
-                    else:
-                        print("Demucs人声文件不存在，使用原始音频")
-                        import shutil
-                        shutil.copy2(speaker_audio_path, vocal_audio_path)
-                else:
-                    print("Demucs分离失败，使用原始音频")
-                    import shutil
-                    shutil.copy2(speaker_audio_path, vocal_audio_path)
-            
-            # 返回vocal文件路径用于声音克隆
-            return vocal_audio_path if vocal_audio_path.exists() else None
+
+            # 直接返回已合并的说话人音频（不再进行 Demucs）
+            return speaker_audio_path if speaker_audio_path.exists() else None
             
         except Exception as e:
             print(f"提取说话人音频失败: {str(e)}")
