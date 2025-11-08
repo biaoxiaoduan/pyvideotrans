@@ -552,6 +552,9 @@ if __name__ == '__main__':
                 <div class=\"files\" id=\"files\"></div>
                 <pre id=\"error\" style=\"display:none\"></pre>
                 <div id=\"preproc\" style=\"margin-top:10px;font-size:13px;color:#555;\">音频预处理：正在提取/分离人声...</div>
+                <div style=\"margin-top:12px;\">
+                  <button id=\"btnCheckNow\" style=\"padding:6px 12px;border:1px solid #007AFF;background:#007AFF;color:#fff;border-radius:6px;cursor:pointer;\">查看处理结果</button>
+                </div>
             </main>
             <script>
             const taskId = ((TASK_ID_JSON));
@@ -559,7 +562,21 @@ if __name__ == '__main__':
             const filesEl = document.getElementById('files');
             const errEl = document.getElementById('error');
             const preprocEl = document.getElementById('preproc');
+            const btnCheckNow = document.getElementById('btnCheckNow');
+            console.log('[result] btnCheckNow present =', !!btnCheckNow);
 
+            async function tryJumpIfReady(){
+                // 改为任意 .srt 存在即跳
+                try{
+                    const r = await fetch(`/viewer_api/${taskId}/list_srts`);
+                    const j = await r.json();
+                    if (j && j.code === 0 && Array.isArray(j.files) && j.files.length > 0){
+                        location.href = `/view/${taskId}`;
+                        return true;
+                    }
+                }catch(e){}
+                return false;
+            }
             async function query() {
                 try {
                     const res = await fetch(`/task_status?task_id=${taskId}`);
@@ -567,16 +584,18 @@ if __name__ == '__main__':
                     if (data.code === -1) { statusEl.textContent = data.msg || '处理中...'; return; }
                     if (data.code === 0) {
                         statusEl.textContent = '完成';
-                        const urls = (data.data && data.data.url) || [];
-                        filesEl.innerHTML = '';
-                        urls.forEach(u => { const a = document.createElement('a'); a.href = u; a.textContent = u; filesEl.appendChild(a); });
                         // 完成后跳转到 /view/<task_id>
-                        setTimeout(() => { location.href = `/view/${taskId}`; }, 800);
+                        location.href = `/view/${taskId}`;
                         return true;
                     }
                     errEl.style.display = 'block'; errEl.textContent = data.msg || '出错了';
-                    return true;
-                } catch (e) { errEl.style.display = 'block'; errEl.textContent = String(e); return true; }
+                    const ok = await tryJumpIfReady();
+                    return ok;
+                } catch (e) {
+                    errEl.style.display = 'block'; errEl.textContent = String(e);
+                    const ok = await tryJumpIfReady();
+                    return ok;
+                }
             }
             async function checkPreprocess(){
                 if (!preprocEl) return;
@@ -598,6 +617,27 @@ if __name__ == '__main__':
                 checkPreprocess();
                 const t = setInterval(async ()=>{ const done = await checkPreprocess(); if (done) clearInterval(t); }, 3000);
             })();
+
+            // SRT 结果轮询：每3秒检测一次任意 .srt 是否已经生成，有则直接跳转
+            (function(){
+                console.log('[srt] start polling srt files...');
+                const tSrt = setInterval(async () => {
+                    try {
+                        const r = await fetch(`/viewer_api/${taskId}/list_srts`);
+                        console.log('[srt] GET /viewer_api/list_srts status=', r.status);
+                        let j = {};
+                        try { j = await r.json(); } catch(e){ console.warn('[srt] json parse error', e); }
+                        console.log('[srt] payload', j);
+                        if (j && j.code === 0 && Array.isArray(j.files) && j.files.length > 0) {
+                            console.log('[srt] detected srt files:', j.files, '→ jump /view');
+                            clearInterval(tSrt);
+                            location.href = `/view/${taskId}`;
+                        }
+                    } catch (e) {
+                        console.warn('[srt] poll error', e);
+                    }
+                }, 3000);
+            })();
             window.setupLangSwitcher = function setupLangSwitcher(){
                 if (!langSwitcher) return;
                 if (!availableLangs || availableLangs.length === 0){
@@ -614,11 +654,34 @@ if __name__ == '__main__':
                     renderList();
                 };
             }
-            (async () => {
-                const done = await query();
-                if (!done) return;
+            // 循环轮询直到跳转（3秒节拍），避免重复定时器
+            (function(){
+                const tick = async () => { const done = await query(); if (!done) setTimeout(tick, 3000); };
+                tick();
             })();
-            setInterval(query, 1500);
+
+            // 手动检查按钮：若检测到任意SRT则立即跳转，否则提示处理中
+            async function checkAndJumpNow(){
+                console.log('[result] checkAndJumpNow clicked');
+                try {
+                    const url = `/viewer_api/${taskId}/list_srts`;
+                    console.log('[result] GET', url);
+                    const r = await fetch(url);
+                    console.log('[result] status', r.status);
+                    let j = {};
+                    try { j = await r.json(); } catch(e) { console.warn('[result] json parse error', e); }
+                    console.log('[result] payload', j);
+                    if (j && j.code === 0 && Array.isArray(j.files) && j.files.length > 0){
+                        location.href = `/view/${taskId}`;
+                        return;
+                    }
+                    alert('仍在处理中，请稍后再试。');
+                } catch(e) {
+                    console.warn('checkAndJumpNow error', e);
+                    alert('查询失败，稍后重试。');
+                }
+            }
+            if (btnCheckNow) { btnCheckNow.addEventListener('click', checkAndJumpNow); } else { console.warn('[result] btnCheckNow not found'); }
             </script>
         </body>
         </html>
@@ -5986,6 +6049,19 @@ if __name__ == '__main__':
                     low = name.lower()
                     if low.startswith('upload_') and low.endswith('.mp4'):
                         files.append(name)
+            files.sort()
+            return jsonify({"code": 0, "files": files})
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"读取失败: {e}"}), 500
+
+    @app.route('/viewer_api/<task_id>/list_srts', methods=['GET'])
+    def viewer_list_srts(task_id):
+        """列出任务目录下所有 .srt 文件名，按名称排序。"""
+        task_dir = Path(TARGET_DIR) / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务不存在"}), 404
+        try:
+            files = [f.name for f in task_dir.iterdir() if f.is_file() and f.name.lower().endswith('.srt')]
             files.sort()
             return jsonify({"code": 0, "files": files})
         except Exception as e:
