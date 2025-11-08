@@ -5935,17 +5935,26 @@ if __name__ == '__main__':
                     def _count_inputs(arr):
                         return sum(1 for x in arr if x == '-i')
                     for (gs, ge) in gaps:
+                        # 计算收缩后的区间（>1s 时两端各收100ms）
+                        start_sec = max(0.0, gs)
+                        end_sec = max(start_sec, ge)
+                        gap_dur = end_sec - start_sec
+                        if gap_dur > 1.0:
+                            start_sec = start_sec + 0.200
+                            end_sec = end_sec - 0.200
+                            if end_sec <= start_sec:
+                                continue
                         # 追加人声源输入
                         before = _count_inputs(inputs)
                         inputs.extend(['-i', str(vocals_path)])
                         new_idx = before  # 新增输入的索引编号
-                        delay_ms = int(gs * 1000)
-                        # 在人声文件上裁切 [gs, ge]，并延迟到 gs 起点
+                        delay_ms = int(round(start_sec * 1000))
+                        # 在人声文件上裁切 [start_sec, end_sec]，并延迟到 start_sec 起点
                         filter_complex.append(
-                            f'[{new_idx}:a]atrim={gs}:{ge},asetpts=PTS-STARTPTS,adelay={delay_ms}|{delay_ms}[a{new_idx}]'
+                            f'[{new_idx}:a]atrim={start_sec}:{end_sec},asetpts=PTS-STARTPTS,adelay={delay_ms}|{delay_ms}[a{new_idx}]'
                         )
                         vocals_labels.append(f'[a{new_idx}]')
-                    print(f"将使用原人声填充 {len(gaps)} 段空白，总时长约 {sum(ge-gs for gs,ge in gaps):.2f}s")
+                    print(f"将使用原人声填充 {len(gaps)} 段空白（>1s 收缩±100ms），总时长约 {sum(ge-gs for gs,ge in gaps):.2f}s")
             except Exception:
                 pass
 
