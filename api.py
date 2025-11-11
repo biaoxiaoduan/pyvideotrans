@@ -1987,7 +1987,7 @@ if __name__ == '__main__':
                 saveStatusEl.style.color = color;
             }
 
-            // 保存字幕到SRT文件（通用函数）
+            // 兼容旧函数名：保存原文到 raw.srt
             async function saveSubtitles(showStatus = true) {
                 if (isSaving) return;
                 
@@ -2018,7 +2018,7 @@ if __name__ == '__main__':
                     if (data && data.code === 0) {
                         if (showStatus) {
                             updateSaveStatus('已保存', '#28a745');
-                            console.log('字幕已保存');
+                            console.log('原文字幕已保存到 raw.srt');
                         }
                         
                     // 从 speakers 数组中移除未在字幕中出现的说话人选项
@@ -2504,7 +2504,8 @@ if __name__ == '__main__':
                 }
             });
 
-            async function onSaveSrt() {
+            // 保存原文 SRT 到 raw.srt
+            async function onSaveOriginal() {
                 try {
                     updateSaveStatus('保存中...', '#ffc107');
                     const payload = { subtitles: cues.map(c => ({
@@ -2532,6 +2533,68 @@ if __name__ == '__main__':
                     alert('保存失败');
                 }
             }
+
+            // 保存翻译 SRT 到 translated_<lang>.srt
+            async function onSaveTranslated() {
+                try {
+                    const lang = getSelectedTargetLanguage();
+                    if (!lang){
+                        alert('请选择目标语言后再保存翻译');
+                        return;
+                    }
+                    // 当前语言对应的翻译字段名
+                    const keyLang = `translated_text_${lang}`;
+                    // 检查是否存在任何翻译文本（优先本语言字段，其次通用 translated_text）
+                    const hasTrans = cues.some(c => (c[keyLang] || c.translated_text || '').trim());
+                    if (!hasTrans){
+                        if (!confirm('未检测到翻译文本，是否继续保存？')) return;
+                    }
+                    updateSaveStatus('保存翻译中...', '#ffc107');
+                    const payload = {
+                        target_language: lang,
+                        subtitles: cues.map((c, index) => ({
+                            line: index + 1,
+                            start_time: Number(c.start)||0,
+                            end_time: Number(c.end)||0,
+                            startraw: c.startraw || '',
+                            endraw: c.endraw || '',
+                            time: `${c.startraw||''} --> ${c.endraw||''}`,
+                            text: String(c.text||'').trim(),
+                            // 保存时将该语言文本写入通用字段，后端照常处理
+                            translated_text: String((c[keyLang] || c.translated_text || '').trim()),
+                            speaker: String(c.speaker||'').trim(),
+                        }))
+                    };
+                    console.log('[saveTranslation.manual] target_language =', lang);
+                    const res = await fetch(`/viewer_api/${taskId}/save_translation`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                    });
+                    const data = await res.json();
+                    if (data && data.code === 0){
+                        updateSaveStatus('翻译已保存', '#28a745');
+                        const fname = (data.srt_file || `translated_${lang}.srt`);
+                        console.log('字幕已保存到:', fname);
+                        alert(`字幕已保存到: ${fname}`);
+                    } else {
+                        updateSaveStatus('保存失败', '#dc3545');
+                        alert(data && data.msg ? data.msg : '保存翻译失败');
+                    }
+                } catch (e) {
+                    console.error(e);
+                    updateSaveStatus('保存失败', '#dc3545');
+                    alert('保存翻译失败');
+                }
+            }
+
+            // 绑定时间轴保存按钮到“保存翻译”
+            (function bindSaveTimeline(){
+                try{
+                    const btn = document.getElementById('saveTimeline');
+                    if (!btn) return;
+                    btn.onclick = function(e){ e && e.preventDefault && e.preventDefault(); onSaveTranslated(); };
+                    console.log('[bind] #saveTimeline -> onSaveTranslated');
+                }catch(e){ console.warn('bindSaveTimeline error', e); }
+            })();
 
             async function onSaveJson() {
                 try {
@@ -2939,12 +3002,24 @@ if __name__ == '__main__':
                             if (data && data.code === 0) {
                                 // 将翻译结果添加到字幕数据中
                                 if (data.translated_subtitles && data.translated_subtitles.length > 0) {
+                                    // 目标语言：与请求一致
+                                    const langNow = (targetLanguage || '').toLowerCase();
+                                    const keyLangNow = langNow ? (`translated_text_` + langNow) : '';
                                     data.translated_subtitles.forEach((translated, index) => {
                                         if (cues[index]) {
-                                            cues[index].translated_text = translated.text;
+                                            const txt = translated.text;
+                                            // 写入通用与语言专属字段，确保后续保存与显示正常
+                                            cues[index].translated_text = txt;
+                                            if (keyLangNow) cues[index][keyLangNow] = txt;
                                         }
                                     });
                                     // 重新渲染列表
+                                    // 自动切换界面语言到目标语言，并渲染
+                                    try {
+                                        const sw = document.getElementById('langSwitcher');
+                                        if (sw && langNow){ sw.value = langNow; sw.dispatchEvent(new Event('change')); }
+                                        window.currentTargetLanguage = langNow;
+                                    } catch(e) { console.warn('switch lang after translate error', e); }
                                     renderList();
                                     // 检查是否有语音克隆映射，如果有则显示生成音频按钮
                                     checkVoiceMapping().then(hasMapping => {
@@ -2959,10 +3034,15 @@ if __name__ == '__main__':
                                             btnSynthesizeAudio.style.display = 'inline-block';
                                         }
                                     });
-                                    // 翻译完成后，立即调用保存API，确保刷新后可恢复
+                                    // 翻译完成后，若已选择目标语言则保存，未选择则提示并跳过
                                     try {
-                                        const savePayload = {
-                                            target_language: (window.currentTargetLanguage || 'zh'),
+                                        const targetLangAuto = (typeof getSelectedTargetLanguage === 'function' ? getSelectedTargetLanguage() : (window.currentTargetLanguage || '')).toLowerCase();
+                                        if (!targetLangAuto){
+                                            console.warn('未选择目标语言，已跳过自动保存翻译');
+                                        } else {
+                                          const keyLangAuto = `translated_text_${targetLangAuto}`;
+                                          const savePayload = {
+                                            target_language: targetLangAuto,
                                             subtitles: cues.map(function(c, index){
                                                 return {
                                                     line: index + 1,
@@ -2972,19 +3052,21 @@ if __name__ == '__main__':
                                                     endraw: c.endraw || '',
                                                     time: (String(c.startraw || '') + ' --> ' + String(c.endraw || '')),
                                                     text: String(c.text || '').trim(),
-                                                    translated_text: String(c.translated_text || '').trim(),
+                                                    translated_text: String((c[keyLangAuto] || c.translated_text || '').trim()),
                                                     speaker: String(c.speaker || '').trim()
                                                 };
                                             })
-                                        };
-                                        const saveRes = await fetch(`/viewer_api/${taskId}/save_translation`, {
+                                          };
+                                          console.log('[autoSaveTranslation] target_language =', targetLangAuto);
+                                          const saveRes = await fetch(`/viewer_api/${taskId}/save_translation`, {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json' },
                                             body: JSON.stringify(savePayload)
-                                        });
-                                        const saveJson = await saveRes.json().catch(()=>null);
-                                        if (!(saveJson && saveJson.code === 0)) {
-                                            console.warn('自动保存翻译失败', saveJson);
+                                          });
+                                          const saveJson = await saveRes.json().catch(()=>null);
+                                          if (!(saveJson && saveJson.code === 0)) {
+                                              console.warn('自动保存翻译失败', saveJson);
+                                          }
                                         }
                                     } catch (err) {
                                         console.warn('自动保存翻译异常', err);
@@ -3012,6 +3094,52 @@ if __name__ == '__main__':
                 }
             }
 
+            // 获取当前选择的目标语言（从 langSwitcher 组件）
+            function getSelectedTargetLanguage(){
+                try{
+                    const sw = document.getElementById('langSwitcher');
+                    if (sw){
+                        // 1) 直接是 select
+                        if (sw.tagName === 'SELECT'){
+                            const v = (sw.value || '').trim();
+                            if (v) return v.toLowerCase();
+                        }
+                        // 2) 容器里找 select
+                        const sel = sw.querySelector('select');
+                        if (sel){
+                            const v = (sel.value || '').trim();
+                            if (v) return v.toLowerCase();
+                        }
+                        // 3) 单选按钮组
+                        const checkedRadio = sw.querySelector('input[type="radio"][name], input[type="radio"][data-lang]');
+                        if (checkedRadio){
+                            const radios = sw.querySelectorAll(`input[type="radio"][name="${checkedRadio.name}"]`);
+                            for (const r of radios){
+                                if (r.checked){
+                                    const v = (r.dataset.lang || r.value || '').trim();
+                                    if (v) return v.toLowerCase();
+                                }
+                            }
+                        }
+                        // 4) 活动按钮
+                        const activeBtn = sw.querySelector('.active,[aria-pressed="true"],[data-active="true"],[aria-selected="true"],.is-active');
+                        if (activeBtn){
+                            const v = (activeBtn.dataset.lang || activeBtn.getAttribute('data-lang') || activeBtn.value || activeBtn.textContent || '').trim();
+                            if (v) return v.toLowerCase();
+                        }
+                        // 5) 退而求其次：第一个 data-lang
+                        const withData = sw.querySelector('[data-lang]');
+                        if (withData){
+                            const v = (withData.dataset.lang || withData.getAttribute('data-lang') || '').trim();
+                            if (v) return v.toLowerCase();
+                        }
+                    }
+                }catch(e){ console.warn('getSelectedTargetLanguage error', e); }
+                // 最后回退到全局变量（若之前设置过）
+                if (window.currentTargetLanguage) return String(window.currentTargetLanguage).toLowerCase();
+                return '';
+            }
+
             // 保存翻译结果功能
             async function onSaveTranslation() {
                 try {
@@ -3031,8 +3159,12 @@ if __name__ == '__main__':
                     btnSaveTranslation.disabled = true;
                     
                     // 准备保存数据
-                    // 需要保存的目标语言，如果之前翻译时记录了则复用
-                    const targetLang = (window.currentTargetLanguage || 'zh');
+                    // 需要保存的目标语言：从 langSwitcher 读取，避免误用 zh 回退
+                    const targetLang = getSelectedTargetLanguage();
+                    if (!targetLang){
+                        alert('请选择目标语言后再保存');
+                        return;
+                    }
                     const saveData = {
                         target_language: targetLang,
                         subtitles: cues.map((c, index) => ({
@@ -3048,6 +3180,7 @@ if __name__ == '__main__':
                         }))
                     };
                     
+                    console.log('[saveTranslation] target_language =', targetLang);
                     const res = await fetch(`/viewer_api/${taskId}/save_translation`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -3069,6 +3202,23 @@ if __name__ == '__main__':
                     btnSaveTranslation.disabled = false;
                 }
             }
+
+            // 语言切换监听：同步全局变量并打印日志，便于排障
+            (function bindLangSwitcher(){
+                try{
+                    const sw = document.getElementById('langSwitcher');
+                    if (!sw) return;
+                    const handler = function(){
+                        const v = (this && this.value !== undefined) ? this.value : getSelectedTargetLanguage();
+                        const val = (v || '').toLowerCase();
+                        window.currentTargetLanguage = val || '';
+                        console.log('[langSwitcher] changed ->', window.currentTargetLanguage || '(empty)');
+                    };
+                    sw.addEventListener('change', handler);
+                    // 初始化打一遍日志
+                    handler.call(sw);
+                }catch(e){ console.warn('bindLangSwitcher error', e); }
+            })();
 
             // 语音克隆功能
             async function onVoiceClone() {
@@ -3800,6 +3950,7 @@ if __name__ == '__main__':
 
     @app.route('/viewer_api/<task_id>/export_srt', methods=['POST'])
     def viewer_export_srt(task_id):
+        print('viewer_export_srt')
         # 将前端编辑后的字幕导出为 SRT 文件，并返回下载链接
         task_dir = Path(TARGET_DIR) / task_id
         if not task_dir.exists():
@@ -4159,9 +4310,9 @@ if __name__ == '__main__':
                 
                 srt_str = help_srt.get_srt_from_list(srt_list)
                 
-                # 生成带语言后缀的文件名
+                # 仅在明确翻译时落盘：若目标为中文，固定命名为 translated_zh.srt，其它语言为 translated_<lang>.srt
                 language_suffix = target_language.lower()
-                srt_filename = f'translated_{language_suffix}.srt'
+                srt_filename = 'translated_zh.srt' if language_suffix in ('zh', 'zh-cn', 'zh-hans', 'zh_cn') else f'translated_{language_suffix}.srt'
                 srt_path = task_dir / srt_filename
                 srt_path.write_text(srt_str, encoding='utf-8')
                 
@@ -4186,8 +4337,16 @@ if __name__ == '__main__':
     @app.route('/viewer_api/<task_id>/save_translation', methods=['POST'])
     def viewer_save_translation(task_id):
         """保存翻译结果接口"""
+        print(f"[save_translation] task_id={task_id}")
         data = request.json
+        try:
+            debug_len = len(data.get('subtitles', [])) if isinstance(data, dict) else 'N/A'
+            debug_lang = (data or {}).get('target_language') if isinstance(data, dict) else None
+            print(f"[save_translation] payload keys={list((data or {}).keys()) if isinstance(data, dict) else 'N/A'} lang={debug_lang} items={debug_len}")
+        except Exception as _e:
+            print(f"[save_translation] failed to inspect payload: {_e}")
         if not data or 'subtitles' not in data or 'target_language' not in data:
+            print("[save_translation] missing subtitles or target_language")
             return jsonify({"code": 1, "msg": "缺少字幕数据或目标语言"}), 400
 
         task_dir = Path(TARGET_DIR) / task_id
@@ -4198,7 +4357,8 @@ if __name__ == '__main__':
             from videotrans.util import help_srt
             
             subtitles = data['subtitles']
-            target_language = data['target_language']
+            target_language = str(data['target_language']).strip().lower()
+            print(f"[save_translation] normalized target_language={target_language}")
             
             # 创建翻译后的SRT内容（携带时间，单位毫秒）
             srt_list = []
@@ -4213,13 +4373,21 @@ if __name__ == '__main__':
                 })
             
             srt_str = help_srt.get_srt_from_list(srt_list)
+            print(f"[save_translation] built srt entries={len(srt_list)}")
             
-            # 生成带语言后缀的文件名
+            # 仅在明确保存翻译时落盘：中文固定命名 translated_zh.srt，其它语言 translated_<lang>.srt
             language_suffix = target_language.lower()
-            srt_filename = f'translated_{language_suffix}.srt'
+            srt_filename = 'translated_zh.srt' if language_suffix in ('zh', 'zh-cn', 'zh-hans', 'zh_cn') else f'translated_{language_suffix}.srt'
             srt_path = task_dir / srt_filename
+            print(srt_path)
             srt_path.write_text(srt_str, encoding='utf-8')
-            print(f"翻译文件已保存到: {srt_filename}")
+            # 记录最近一次保存的目标语言，供刷新后优先读取
+            try:
+                (task_dir / 'last_translation_lang.txt').write_text(language_suffix, encoding='utf-8')
+                print(f"[save_translation] wrote last_translation_lang.txt -> {language_suffix}")
+            except Exception as _e:
+                print(f"[save_translation] failed to write last_translation_lang.txt: {_e}")
+            print(f"[save_translation] wrote file: {srt_path}")
             
             return jsonify({
                 "code": 0,
@@ -4228,7 +4396,7 @@ if __name__ == '__main__':
             })
             
         except Exception as e:
-            print(f"保存翻译失败: {str(e)}")
+            print(f"[save_translation] exception: {str(e)}")
             return jsonify({"code": 1, "msg": f"保存翻译失败: {str(e)}"}), 500
             
             # 同时保存JSON格式的翻译结果
@@ -6045,13 +6213,30 @@ if __name__ == '__main__':
 
     @app.route('/viewer_api/<task_id>/list_srts', methods=['GET'])
     def viewer_list_srts(task_id):
-        """列出任务目录下所有 .srt 文件名，按名称排序。"""
+        """列出任务目录下所有 .srt 文件名，按优先级排序。
+        优先顺序：raw.srt > translated_<last_saved>.srt > 其他 translated_*.srt > 其余.
+        其中 last_saved 来自 last_translation_lang.txt。
+        """
         task_dir = Path(TARGET_DIR) / task_id
         if not task_dir.exists():
             return jsonify({"code": 1, "msg": "任务不存在"}), 404
         try:
             files = [f.name for f in task_dir.iterdir() if f.is_file() and f.name.lower().endswith('.srt')]
-            files.sort()
+            # 读取最近一次保存语言
+            try:
+                last_lang = (task_dir / 'last_translation_lang.txt').read_text(encoding='utf-8').strip().lower()
+            except Exception:
+                last_lang = ''
+            def sort_key(nm: str):
+                n = nm.lower()
+                if n == 'raw.srt':
+                    return (0, n)
+                if last_lang and n == f'translated_{last_lang}.srt':
+                    return (1, n)
+                if n.startswith('translated_'):
+                    return (2, n)
+                return (9, n)
+            files.sort(key=sort_key)
             return jsonify({"code": 0, "files": files})
         except Exception as e:
             return jsonify({"code": 1, "msg": f"读取失败: {e}"}), 500
