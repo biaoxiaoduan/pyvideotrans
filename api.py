@@ -93,6 +93,34 @@ if __name__ == '__main__':
     ######################
 
     app = Flask(__name__, static_folder=TARGET_DIR)
+    # 注册语音管理蓝图并打印加载状态
+    try:
+        from voice_manager import voice_bp
+        app.register_blueprint(voice_bp)
+        print('[init] voice_manager blueprint loaded')
+    except Exception as e:
+        print('[init] voice_manager blueprint not loaded:', e)
+
+    # 调试：启动时打印已注册的路由，便于排查 404 问题
+    try:
+        print('[init] Registered routes:')
+        for rule in sorted(app.url_map.iter_rules(), key=lambda r: r.rule):
+            methods = ','.join(sorted(m for m in rule.methods if m not in {'HEAD','OPTIONS'}))
+            print(f"  {methods:10s} {rule.rule}")
+    except Exception as _e:
+        print('[init] route dump failed:', _e)
+
+    # 运行时可访问的路由调试端点
+    @app.route('/debug/routes', methods=['GET'])
+    def _debug_routes():
+        try:
+            routes = []
+            for rule in sorted(app.url_map.iter_rules(), key=lambda r: r.rule):
+                methods = sorted(m for m in rule.methods if m not in {'HEAD','OPTIONS'})
+                routes.append({'rule': rule.rule, 'methods': methods})
+            return jsonify({'code': 0, 'routes': routes})
+        except Exception as e:
+            return jsonify({'code': 1, 'msg': str(e)})
 
     # 根路径重定向到 FunASR 上传页
     @app.route('/', methods=['GET'])
@@ -1073,6 +1101,7 @@ if __name__ == '__main__':
                 <h3 style=\"margin:0;\">字幕查看器</h3>
                 <div class=\"task\">任务: {task_id}</div>
                 <div style=\"margin-left:auto; display:flex; gap:8px; align-items:center;\">
+                    <button id=\"btnVoiceManager\" style=\"padding:6px 12px; border:1px solid #455a64; background:#455a64; color:#fff; border-radius:6px; cursor:pointer;\">语音管理</button>
                     <button id=\"btnTranslateSubtitle\" style=\"padding:6px 12px; border:1px solid #9c27b0; background:#9c27b0; color:#fff; border-radius:6px; cursor:pointer;\">1.翻译字幕</button>
                     <button id=\"btnSaveTranslation\" style=\"padding:6px 12px; border:1px solid #17a2b8; background:#17a2b8; color:#fff; border-radius:6px; cursor:pointer; display:none;\">保存翻译</button>
                     <button id=\"btnVoiceClone\" style=\"padding:6px 12px; border:1px solid #e91e63; background:#e91e63; color:#fff; border-radius:6px; cursor:pointer;\">语音克隆</button>
@@ -3220,6 +3249,15 @@ if __name__ == '__main__':
                 }catch(e){ console.warn('bindLangSwitcher error', e); }
             })();
 
+            // 语音管理：跳转新页面 /voice_manager?task_id=<task_id>
+            (function bindVoiceManager(){
+                const btn = document.getElementById('btnVoiceManager');
+                if (!btn) return;
+                btn.addEventListener('click', function(){
+                    window.location.href = `/voice_manager?task_id=${taskId}`;
+                });
+            })();
+
             // 语音克隆功能
             async function onVoiceClone() {
                 try {
@@ -4776,6 +4814,54 @@ if __name__ == '__main__':
             return jsonify({"code": 0, "voices": out})
         except Exception as e:
             return jsonify({"code": 1, "msg": f"获取音色失败: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/elevenlabs_voice/<voice_id>', methods=['DELETE'])
+    def viewer_delete_elevenlabs_voice(task_id, voice_id):
+        try:
+            if not config.params.get('elevenlabstts_key'):
+                return jsonify({"code": 1, "msg": "未配置ElevenLabs API密钥"}), 400
+            import requests
+            headers = { 'xi-api-key': config.params['elevenlabstts_key'] }
+            url = f"https://api.elevenlabs.io/v1/voices/{voice_id}"
+            r = requests.delete(url, headers=headers, timeout=30)
+            if r.status_code in (200,204):
+                return jsonify({"code": 0, "msg": "删除成功"})
+            return jsonify({"code": 1, "msg": f"删除失败: {r.status_code} {r.text}"}), 400
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"删除异常: {str(e)}"}), 500
+
+    @app.route('/viewer_api/<task_id>/elevenlabs_tts_preview', methods=['POST'])
+    def viewer_elevenlabs_tts_preview(task_id):
+        data = request.get_json(silent=True) or {}
+        text = (data.get('text') or '').strip()
+        voice_id = (data.get('voice_id') or '').strip()
+        if not text or not voice_id:
+            return jsonify({"code": 1, "msg": "缺少文本或voice_id"}), 400
+        if not config.params.get('elevenlabstts_key'):
+            return jsonify({"code": 1, "msg": "未配置ElevenLabs API密钥"}), 400
+        try:
+            import requests, uuid
+            task_dir = Path(TARGET_DIR) / task_id
+            task_dir.mkdir(parents=True, exist_ok=True)
+            out_path = task_dir / f"preview_{uuid.uuid4().hex[:8]}.mp3"
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+            headers = {
+                'xi-api-key': config.params['elevenlabstts_key'],
+                'accept': 'audio/mpeg',
+                'content-type': 'application/json'
+            }
+            payload = {
+                'text': text,
+                'model_id': 'eleven_multilingual_v2'
+            }
+            r = requests.post(url, headers=headers, json=payload, timeout=60)
+            if r.status_code != 200:
+                return jsonify({"code": 1, "msg": f"TTS失败: {r.status_code} {r.text}"}), 400
+            with open(out_path, 'wb') as f:
+                f.write(r.content)
+            return jsonify({"code": 0, "audio_url": f'/{API_RESOURCE}/{task_id}/{out_path.name}'})
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"试听异常: {str(e)}"}), 500
 
     @app.route('/viewer_api/<task_id>/save_voice_mapping', methods=['POST'])
     def viewer_save_voice_mapping(task_id):
