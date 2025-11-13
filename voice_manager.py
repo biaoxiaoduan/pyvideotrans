@@ -47,6 +47,22 @@ def voice_manager_page():
     .form-group { margin-bottom: 15px; }
     .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
     .form-group input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+    
+    /* Loading spinner */
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #3498db;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 2s linear infinite;
+      margin: 0 auto;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
@@ -104,6 +120,28 @@ def voice_manager_page():
       <button id="confirmClone" class="btn success">确认克隆</button>
     </div>
   </div>
+  
+  <!-- Edit Modal -->
+  <div id="editModal" class="modal">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <h3>编辑声音名称</h3>
+      <div class="form-group">
+        <label for="editVoiceName">语音名称:</label>
+        <input type="text" id="editVoiceName" placeholder="请输入新的语音名称">
+        <input type="hidden" id="editVoiceId">
+      </div>
+      <button id="confirmEdit" class="btn primary">确认修改</button>
+    </div>
+  </div>
+  
+  <!-- Loading Modal -->
+  <div id="loadingModal" class="modal">
+    <div class="modal-content" style="text-align: center; padding: 30px;">
+      <div class="spinner"></div>
+      <p style="margin-top: 20px;">正在克隆声音，请稍候...</p>
+    </div>
+  </div>
 
   <script>
   const taskId = new URLSearchParams(location.search).get('task_id') || '';
@@ -134,20 +172,29 @@ def voice_manager_page():
   
   // Modal handling
   const modal = document.getElementById("cloneModal");
-  const span = document.getElementsByClassName("close")[0];
+  const editModal = document.getElementById("editModal");
+  const cloneModalClose = document.getElementsByClassName("close")[0];
+  const editModalClose = document.getElementsByClassName("close")[1];
   
-  span.onclick = function() {
+  cloneModalClose.onclick = function() {
     modal.style.display = "none";
+  }
+  
+  editModalClose.onclick = function() {
+    editModal.style.display = "none";
   }
   
   window.onclick = function(event) {
     if (event.target == modal) {
       modal.style.display = "none";
+    } else if (event.target == editModal) {
+      editModal.style.display = "none";
     }
   }
   
   document.getElementById("confirmClone").addEventListener("click", performClone);
   document.getElementById("previewMerged").addEventListener("click", previewMergedAudio);
+  document.getElementById("confirmEdit").addEventListener("click", performEdit);
   
   try { document.getElementById('taskIdText').textContent = taskId; } catch(e) {}
   
@@ -173,6 +220,7 @@ def voice_manager_page():
             <div class=\"name\">${name} <span class=\"sub\">(${id})</span></div>
             <div class=\"sub\">${cat}</div>
           </div>
+          <button class=\"btn\" data-act=\"edit\" data-id=\"${id}\" data-name=\"${name}\">编辑</button>
           <button class=\"btn\" data-act=\"preview\" data-id=\"${id}\">试听</button>
           <button class=\"btn danger\" data-act=\"delete\" data-id=\"${id}\">删除</button>
         </div>`;
@@ -186,13 +234,111 @@ def voice_manager_page():
       if (!confirm('确认删除该自定义声音？')) return;
       const r = await fetch(`/voice_manager/elevenlabs_voice/${id}?task_id=${taskId}`, { method:'DELETE' });
       const j = await r.json();
-      if (j && j.code === 0){ alert('删除成功'); loadVoices(); } else { alert((j&&j.msg)||'删除失败'); }
+      if (j && j.code === 0){ 
+        alert('删除成功'); 
+        // 刷新整个页面以显示删除后的结果
+        loadVoices();
+        // 如果在克隆声音标签页，也刷新克隆声音列表
+        if (document.querySelector('[data-tab="clone-voice"]').classList.contains('active')) {
+          loadCloneSpeakers();
+        }
+      } else { 
+        alert((j&&j.msg)||'删除失败'); 
+      }
+    } else if (t.dataset.act === 'edit') {
+      // 打开编辑模态框
+      const editModal = document.getElementById('editModal');
+      const editVoiceName = document.getElementById('editVoiceName');
+      const editVoiceId = document.getElementById('editVoiceId');
+      
+      // 填充表单数据
+      editVoiceName.value = t.dataset.name || '';
+      editVoiceId.value = id;
+      
+      // 显示模态框
+      editModal.style.display = 'block';
     } else if (t.dataset.act === 'preview'){
-      const txt = prompt('输入要合成的文本进行试听：', 'Hello, this is a preview.');
-      if (!txt) return;
-      const r = await fetch(`/voice_manager/elevenlabs_tts_preview?task_id=${taskId}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text: txt, voice_id: id }) });
-      const j = await r.json();
-      if (j && j.code === 0 && j.audio_url){ const a = new Audio(j.audio_url); a.play(); } else { alert((j&&j.msg)||'试听失败'); }
+      // 创建或显示预览对话框
+      let previewModal = document.getElementById('previewModal');
+      if (!previewModal) {
+        // 创建预览对话框
+        previewModal = document.createElement('div');
+        previewModal.id = 'previewModal';
+        previewModal.className = 'modal';
+        previewModal.innerHTML = `
+          <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>试听声音</h3>
+            <div class="form-group">
+              <label for="previewText">输入要合成的文本：</label>
+              <input type="text" id="previewText" placeholder="请输入要试听的文本" value="Hello, this is a preview.">
+            </div>
+            <button id="generatePreview" class="btn primary">生成试听</button>
+            <div id="previewAudioContainer" style="margin-top: 15px; display: none;">
+              <audio id="previewAudio" controls style="width: 100%;"></audio>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(previewModal);
+        
+        // 添加关闭事件
+        previewModal.querySelector('.close').onclick = function() {
+          previewModal.style.display = "none";
+        }
+        window.onclick = function(event) {
+          if (event.target == previewModal) {
+            previewModal.style.display = "none";
+          }
+        }
+        
+        // 添加生成试听事件
+        previewModal.querySelector('#generatePreview').addEventListener('click', async function() {
+          const txt = document.getElementById('previewText').value;
+          if (!txt) {
+            alert('请输入要试听的文本');
+            return;
+          }
+          
+          // 显示加载状态
+          const generateBtn = document.getElementById('generatePreview');
+          const originalText = generateBtn.textContent;
+          generateBtn.textContent = '生成中...';
+          generateBtn.disabled = true;
+          
+          try {
+            const r = await fetch(`/voice_manager/elevenlabs_tts_preview?task_id=${taskId}`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ text: txt, voice_id: id })
+            });
+            const j = await r.json();
+            if (j && j.code === 0 && j.audio_url) {
+              // 显示音频播放器
+              const container = document.getElementById('previewAudioContainer');
+              const audio = document.getElementById('previewAudio');
+              audio.src = j.audio_url;
+              container.style.display = 'block';
+              // 自动播放
+              audio.play();
+            } else {
+              alert(j?.msg || '试听失败');
+            }
+          } catch (error) {
+            alert('试听过程中出现错误: ' + error.message);
+          } finally {
+            // 恢复按钮状态
+            generateBtn.textContent = originalText;
+            generateBtn.disabled = false;
+          }
+        });
+      }
+      
+      // 显示对话框
+      previewModal.style.display = "block";
+      // 清空之前的音频
+      document.getElementById('previewAudioContainer').style.display = 'none';
+      // 设置默认文本
+      document.getElementById('previewText').value = 'Hello, this is a preview.';
     }
   });
   
@@ -235,7 +381,7 @@ def voice_manager_page():
   loadVoices();
   listSpeakers();
   
-  // Clone voice functions (new)
+    // Clone voice functions (new)
   async function loadCloneSpeakers(){
     const status = document.getElementById('clone-status');
     const list = document.getElementById('clone-list');
@@ -285,6 +431,7 @@ def voice_manager_page():
               <div>
                 <button class="btn primary" data-act="clone" data-speaker="${speakerName}">克隆</button>
                 <button class="btn" data-act="extract" data-speaker="${speakerName}" style="margin-left: 8px;">提取说话人音频</button>
+                <button class="btn" data-act="add-audio" data-speaker="${speakerName}" style="margin-left: 8px;">添加音频</button>
                 <button class="btn" data-act="select-all" data-speaker="${speakerName}" style="margin-left: 8px;">全选</button>
                 <button class="btn" data-act="deselect-all" data-speaker="${speakerName}" style="margin-left: 8px;">取消全选</button>
               </div>
@@ -314,6 +461,61 @@ def voice_manager_page():
       
       // 调用后端API提取说话人音频
       extractSpeakerAudio(speakerName);
+    } else if (t.dataset.act === 'add-audio') {
+      const speakerName = t.dataset.speaker;
+      if (!speakerName) return;
+      
+      // 创建文件上传输入框
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = 'audio/*';
+      fileInput.style.display = 'none';
+      
+      // 添加文件选择事件监听器
+      fileInput.addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        // 创建FormData对象
+        const formData = new FormData();
+        formData.append('audio', file);
+        formData.append('speaker', speakerName);
+        
+        try {
+          // 显示上传提示
+          const originalText = t.textContent;
+          t.textContent = '上传中...';
+          t.disabled = true;
+          
+          // 发送上传请求
+          const response = await fetch(`/voice_manager/upload_speaker_audio?task_id=${taskId}`, {
+            method: 'POST',
+            body: formData
+          });
+          
+          const result = await response.json();
+          
+          // 恢复按钮状态
+          t.textContent = originalText;
+          t.disabled = false;
+          
+          if (result && result.code === 0) {
+            alert('音频上传成功');
+            // 重新加载说话人列表以显示更新的音频
+            loadCloneSpeakers();
+          } else {
+            alert(result?.msg || '上传失败');
+          }
+        } catch (error) {
+          // 恢复按钮状态
+          t.textContent = '添加音频';
+          t.disabled = false;
+          alert('上传过程中出现错误: ' + error.message);
+        }
+      });
+      
+      // 触发文件选择
+      fileInput.click();
     } else if (t.dataset.act === 'select-all') {
       const speakerName = t.dataset.speaker;
       if (!speakerName) return;
@@ -335,43 +537,34 @@ def voice_manager_page():
     }
   });
   
-  async function extractSpeakerAudio(speakerName) {
-    try {
-      // 显示正在提取的提示
-      alert('正在提取说话人音频，请稍候...');
-      
-      // 先调用扫描功能生成说话人音频片段
-      const scanResponse = await fetch(`/voice_manager/speakers_extract?task_id=${taskId}`, { method: 'POST' });
-      const scanResult = await scanResponse.json();
-      
-      if (!scanResult || scanResult.code !== 0) {
-        alert(scanResult?.msg || '扫描生成音频片段失败');
-        return;
+    async function extractSpeakerAudio(speakerName) {
+      try {
+        // 显示正在提取的提示
+        alert('正在提取说话人音频，请稍候...');
+        
+        // 直接调用提取功能，它会自动处理音频片段的生成
+        const response = await fetch(`/voice_manager/extract_speaker_audio?task_id=${taskId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            speaker: speakerName
+          })
+        });
+        
+        const result = await response.json();
+        if (result && result.code === 0) {
+          alert('提取成功，文件已保存到任务目录的speaker_audio文件夹中');
+          // 重新加载说话人列表以显示更新的音频
+          loadCloneSpeakers();
+        } else {
+          alert(result?.msg || '提取失败');
+        }
+      } catch (error) {
+        alert('提取过程中出现错误: ' + error.message);
       }
-      
-      // 然后调用提取功能
-      const response = await fetch(`/voice_manager/extract_speaker_audio?task_id=${taskId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          speaker: speakerName
-        })
-      });
-      
-      const result = await response.json();
-      if (result && result.code === 0) {
-        alert('提取成功，文件已保存到任务目录的speaker_audio文件夹中');
-        // 重新加载说话人列表以显示更新的音频
-        loadCloneSpeakers();
-      } else {
-        alert(result?.msg || '提取失败');
-      }
-    } catch (error) {
-      alert('提取过程中出现错误: ' + error.message);
     }
-  }
   
   async function performClone() {
     if (!currentSpeakerName) return;
@@ -396,6 +589,10 @@ def voice_manager_page():
       return;
     }
     
+    // 显示loading对话框
+    const loadingModal = document.getElementById("loadingModal");
+    loadingModal.style.display = "block";
+    
     try {
       // 合并该说话人的选定音频片段
       const response = await fetch(`/voice_manager/clone_voice?task_id=${taskId}`, {
@@ -410,6 +607,9 @@ def voice_manager_page():
         })
       });
       
+      // 隐藏loading对话框
+      loadingModal.style.display = "none";
+      
       const result = await response.json();
       if (result && result.code === 0) {
         alert('克隆成功');
@@ -417,9 +617,16 @@ def voice_manager_page():
         // Reload voice library tab
         document.querySelector('[data-tab="voice-library"]').click();
       } else {
-        alert(result?.msg || '克隆失败');
+        // 检查是否是文件大小错误
+        if (result?.msg?.includes('upload_file_size_exceeded')) {
+          alert('克隆失败: 音频文件太大，请上传小于11MB的文件');
+        } else {
+          alert(result?.msg || '克隆失败');
+        }
       }
     } catch (error) {
+      // 隐藏loading对话框
+      loadingModal.style.display = "none";
       alert('克隆过程中出现错误: ' + error.message);
     }
   }
@@ -485,6 +692,65 @@ def voice_manager_page():
       alert('生成预览过程中出现错误: ' + error.message);
     }
   }
+  
+  // 编辑声音名称功能
+  async function performEdit() {
+    const editModal = document.getElementById('editModal');
+    const editVoiceName = document.getElementById('editVoiceName');
+    const editVoiceId = document.getElementById('editVoiceId');
+    
+    const voiceId = editVoiceId.value;
+    const newName = editVoiceName.value.trim();
+    
+    if (!voiceId) {
+      alert('无效的声音ID');
+      return;
+    }
+    
+    if (!newName) {
+      alert('请输入新的语音名称');
+      return;
+    }
+    
+    try {
+      // 显示加载状态
+      const confirmButton = document.getElementById('confirmEdit');
+      const originalText = confirmButton.textContent;
+      confirmButton.textContent = '修改中...';
+      confirmButton.disabled = true;
+      
+      // 调用后端API修改声音名称
+      const response = await fetch(`/voice_manager/elevenlabs_voice/${voiceId}?task_id=${taskId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: newName })
+      });
+      
+      const result = await response.json();
+      
+      // 恢复按钮状态
+      confirmButton.textContent = originalText;
+      confirmButton.disabled = false;
+      
+      if (result && result.code === 0) {
+        alert('修改成功');
+        // 关闭模态框
+        editModal.style.display = 'none';
+        // 重新加载声音列表
+        loadVoices();
+      } else {
+        alert(result?.msg || '修改失败');
+      }
+    } catch (error) {
+      // 恢复按钮状态
+      const confirmButton = document.getElementById('confirmEdit');
+      confirmButton.textContent = '确认修改';
+      confirmButton.disabled = false;
+      alert('修改过程中出现错误: ' + error.message);
+    }
+  }
   </script>
 </body>
 </html>
@@ -524,9 +790,35 @@ def vm_elevenlabs_voices():
         return jsonify({"code": 1, "msg": f"获取音色失败: {str(e)}"}), 500
 
 
-@voice_bp.route('/elevenlabs_voice/<voice_id>', methods=['DELETE'])
+@voice_bp.route('/elevenlabs_voice/<voice_id>', methods=['DELETE', 'PUT'])
 def vm_delete_voice(voice_id):
     task_id = (request.args.get('task_id') or '').strip()
+    
+    # PUT请求用于编辑声音名称
+    if request.method == 'PUT':
+        try:
+            if not config.params.get('elevenlabstts_key'):
+                return jsonify({"code": 1, "msg": "未配置ElevenLabs API密钥"}), 400
+            
+            data = request.get_json(silent=True) or {}
+            new_name = (data.get('name') or '').strip()
+            
+            if not new_name:
+                return jsonify({"code": 1, "msg": "缺少新的声音名称"}), 400
+            
+            # 使用ElevenLabs SDK编辑声音名称
+            from elevenlabs import ElevenLabs
+            import httpx
+            client = ElevenLabs(api_key=config.params['elevenlabstts_key'], httpx_client=httpx.Client())
+            
+            # 编辑声音名称
+            client.voices.update(voice_id=voice_id, name=new_name)
+            
+            return jsonify({"code": 0, "msg": "修改成功"})
+        except Exception as e:
+            return jsonify({"code": 1, "msg": f"修改异常: {str(e)}"}), 500
+    
+    # DELETE请求用于删除声音
     try:
         if not config.params.get('elevenlabstts_key'):
             return jsonify({"code": 1, "msg": "未配置ElevenLabs API密钥"}), 400
@@ -680,10 +972,11 @@ def _extract_speakers_audio(task_id: str):
             et = seg['end_time']/1000.0
             dur = max(0.0, et - st)
             if dur <= 0: continue
-            segf = spkdir / f"{spk}_seg_{i}.wav"
+
+            segf = spkdir / f"{spk}_seg_{i}.mp3"
             # 检查文件是否已存在，如果不存在则生成
             if not segf.exists():
-                tools.runffmpeg(['-y','-i', vocals.as_posix(), '-ss', str(st), '-t', str(dur), '-acodec','pcm_s16le','-ar','44100','-ac','2', segf.as_posix()])
+                tools.runffmpeg(['-y','-i', vocals.as_posix(), '-ss', str(st), '-t', str(dur), '-f', 'mp3', '-ab', '64k', segf.as_posix()])
             # 添加到结果中
             results.append({'speaker': spk, 'audio_url': f"/apidata/{task_id}/speaker_audio/{segf.name}"})
     return True, 'ok', results
@@ -710,11 +1003,12 @@ def vm_speakers_list():
         if srt_files:
             srt_path = srt_files[0]
     
-    if not srt_path.exists():
-        return jsonify({"code": 0, "groups": [], "segments": []})
+    # 初始化segments列表
+    segments = []
     
-    # 解析SRT文件获取说话人和时间段
-    segments = _parse_srt_items(srt_path)
+    # 如果存在SRT文件，解析它获取说话人和时间段
+    if srt_path.exists():
+        segments = _parse_srt_items(srt_path)
     
     # 按说话人分组
     speaker_segments = {}
@@ -724,21 +1018,56 @@ def vm_speakers_list():
             speaker_segments[speaker] = []
         speaker_segments[speaker].append(segment)
     
-    # 获取音频片段文件
+    # 获取音频片段文件目录
     speaker_audio_dir = task_dir / 'speaker_audio'
-    if not speaker_audio_dir.exists():
-        return jsonify({"code": 0, "groups": [], "segments": segments})
     
+
+    # 如果speaker_audio目录存在，查找所有说话人的音频文件（包括上传的）
+    if speaker_audio_dir.exists():
+        # 遍历所有音频文件
+        for audio_file in speaker_audio_dir.glob("*.mp3"):
+            # 从文件名中提取说话人名称
+            filename = audio_file.name
+            if filename.startswith(("spk", "speaker")) and "_seg_" in filename:
+                # 提取说话人名称（例如从"spk0_seg_0.mp3"中提取"spk0"）
+                speaker = filename.split("_seg_")[0]
+                
+                # 如果这个说话人不在speaker_segments中，添加它
+                if speaker not in speaker_segments:
+                    speaker_segments[speaker] = []
+    
+
     # 为每个说话人收集音频片段
     for speaker, segs in speaker_segments.items():
-        for i, seg in enumerate(segs):
-            # 生成音频片段文件名
-            seg_filename = f"{speaker}_seg_{i}.wav"
-            seg_file = speaker_audio_dir / seg_filename
-            if seg_file.exists():
-                seg['audio_url'] = f"/apidata/{task_id}/speaker_audio/{seg_filename}"
+        # 获取该说话人的所有音频片段文件
+        speaker_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.mp3"))
+        # 按索引排序
+        speaker_files.sort(key=lambda x: int(x.stem.split('_')[-1]))
+        
+        # 为每个音频文件创建或更新segment信息
+        for i, audio_file in enumerate(speaker_files):
+            # 生成音频URL
+            audio_url = f"/apidata/{task_id}/speaker_audio/{audio_file.name}"
+            
+            # 如果是来自SRT的片段且索引匹配，更新其audio_url
+            if i < len(segs):
+                segs[i]['audio_url'] = audio_url
+            else:
+                # 如果是额外的上传文件，创建新的segment条目
+                segs.append({
+                    'speaker': speaker,
+                    'audio_url': audio_url,
+                    'start_time': 0,
+                    'end_time': 0,
+                    'text': f'上传的音频片段 {i+1}'
+                })
     
-    return jsonify({"code": 0, "groups": [{'speaker': k} for k in speaker_segments.keys()], "segments": segments})
+    # 展平所有segments
+    all_segments = []
+    for segs in speaker_segments.values():
+        all_segments.extend(segs)
+    
+    return jsonify({"code": 0, "groups": [{'speaker': k} for k in speaker_segments.keys()], "segments": all_segments})
 
 
 @voice_bp.route('/clone_voice', methods=['POST'])
@@ -769,44 +1098,50 @@ def vm_clone_voice():
         if not speaker_audio_dir.exists():
             return jsonify({"code": 1, "msg": "说话人音频目录不存在"}), 400
         
+
         # 首先检查是否存在预览文件
-        preview_files = list(speaker_audio_dir.glob(f"{speaker}_preview_*.wav"))
+        preview_files = list(speaker_audio_dir.glob(f"{speaker}_preview_*.mp3"))
         if preview_files:
             # 使用最新的预览文件
             preview_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
             merged_file = preview_files[0]
         else:
             # 如果没有预览文件，则重新生成合并文件
-            # 如果没有指定片段，则查找说话人的所有音频片段
-            if not segments:
-                segment_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.wav"))
-                if not segment_files:
-                    return jsonify({"code": 1, "msg": f"未找到说话人 {speaker} 的音频片段"}), 400
-            else:
-                # 只获取选定的片段
-                segment_files = []
+
+            # 获取说话人的所有音频片段文件
+            segment_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.mp3"))
+            if not segment_files:
+                return jsonify({"code": 1, "msg": f"未找到说话人 {speaker} 的音频片段"}), 400
+            
+            # 如果指定了片段，则只选择这些片段
+            if segments:
+                # 根据索引过滤片段
+                selected_files = []
                 for index in segments:
-                    seg_file = speaker_audio_dir / f"{speaker}_seg_{index}.wav"
-                    if seg_file.exists():
-                        segment_files.append(seg_file)
+                    # 查找匹配索引的文件
+                    matched_files = [f for f in segment_files if f.name == f"{speaker}_seg_{index}.mp3"]
+                    if matched_files:
+                        selected_files.append(matched_files[0])
                 
-                if not segment_files:
+                if not selected_files:
                     return jsonify({"code": 1, "msg": f"未找到说话人 {speaker} 的选定音频片段"}), 400
+                segment_files = selected_files
             
             # 按照索引排序
             segment_files.sort(key=lambda x: int(x.stem.split('_')[-1]))
             
+
             # 创建合并文件的列表
             concat_file = speaker_audio_dir / f"{speaker}_concat.txt"
-            merged_file = speaker_audio_dir / f"{speaker}_merged_{uuid.uuid4().hex[:8]}.wav"
+            merged_file = speaker_audio_dir / f"{speaker}_merged_{uuid.uuid4().hex[:8]}.mp3"
             
             # 写入concat文件
             with open(concat_file, 'w') as f:
                 for seg_file in segment_files:
                     f.write(f"file '{seg_file.as_posix()}'\n")
             
-            # 使用ffmpeg合并音频文件
-            tools.runffmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', concat_file.as_posix(), '-c', 'copy', merged_file.as_posix()])
+            # 使用ffmpeg合并音频文件并转换为MP3格式
+            tools.runffmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', concat_file.as_posix(), '-f', 'mp3', '-ab', '64k', merged_file.as_posix()])
             
             # 删除concat文件
             try:
@@ -828,6 +1163,19 @@ def vm_clone_voice():
                 return jsonify({"code": 1, "msg": f"音频文件长度不足6秒，当前长度：{duration:.2f}秒"}), 400
         except Exception as e:
             print(f"Error checking audio duration: {e}")
+        
+
+        # 检查音频文件大小 (ElevenLabs 限制为 11MB)
+        file_size = merged_file.stat().st_size
+        max_size = 11 * 1024 * 1024  # 11MB in bytes
+        if file_size > max_size:
+            # 删除合并后的临时文件（仅当不是预览文件时）
+            if not str(merged_file).endswith('_preview_.mp3') and 'preview' not in str(merged_file):
+                try:
+                    merged_file.unlink()
+                except:
+                    pass
+            return jsonify({"code": 1, "msg": f"音频文件大小超过11MB限制，请使用较短的音频片段。当前大小: {file_size / (1024*1024):.2f}MB"}), 400
         
         # 使用ElevenLabs SDK进行语音克隆
         try:
@@ -851,7 +1199,7 @@ def vm_clone_voice():
             )
             
             # 删除合并后的临时文件（仅当不是预览文件时）
-            if not str(merged_file).endswith('_preview_.wav') and 'preview' not in str(merged_file):
+            if not str(merged_file).endswith('_preview_.mp3') and 'preview' not in str(merged_file):
                 try:
                     merged_file.unlink()
                 except:
@@ -868,7 +1216,7 @@ def vm_clone_voice():
         except Exception as e:
             print(f"创建语音克隆失败: {str(e)}")
             # 删除合并后的临时文件（仅当不是预览文件时）
-            if not str(merged_file).endswith('_preview_.wav') and 'preview' not in str(merged_file):
+            if not str(merged_file).endswith('_preview_.mp3') and 'preview' not in str(merged_file):
                 try:
                     merged_file.unlink()
                 except:
@@ -893,6 +1241,7 @@ def vm_extract_speaker_audio():
         task_dir = Path(config.ROOT_DIR) / 'apidata' / task_id
         speaker_audio_dir = task_dir / 'speaker_audio'
         
+
         # 如果目录不存在，先尝试生成音频片段
         if not speaker_audio_dir.exists():
             # 调用_extract_speakers_audio生成所有说话人的音频片段
@@ -901,36 +1250,37 @@ def vm_extract_speaker_audio():
                 return jsonify({"code": 1, "msg": f"生成音频片段失败: {msg}"}), 400
         else:
             # 检查指定说话人的音频片段是否存在
-            segment_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.wav"))
+            segment_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.mp3"))
+        if not segment_files:
+            # 如果没有找到该说话人的音频片段，尝试重新生成
+            ok, msg, results = _extract_speakers_audio(task_id)
+            if not ok:
+                return jsonify({"code": 1, "msg": f"生成音频片段失败: {msg}"}), 400
+            # 再次检查指定说话人的音频片段是否存在
+            segment_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.mp3"))
             if not segment_files:
-                # 如果没有找到该说话人的音频片段，尝试重新生成
-                ok, msg, results = _extract_speakers_audio(task_id)
-                if not ok:
-                    return jsonify({"code": 1, "msg": f"生成音频片段失败: {msg}"}), 400
-                # 再次检查指定说话人的音频片段是否存在
-                segment_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.wav"))
-                if not segment_files:
-                    return jsonify({"code": 1, "msg": f"未找到说话人 {speaker} 的音频片段"}), 400
+                return jsonify({"code": 1, "msg": f"未找到说话人 {speaker} 的音频片段"}), 400
         
         # 查找说话人的所有音频片段
-        segment_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.wav"))
+        segment_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.mp3"))
         if not segment_files:
             return jsonify({"code": 1, "msg": f"未找到说话人 {speaker} 的音频片段"}), 400
         
         # 按照索引排序
         segment_files.sort(key=lambda x: int(x.stem.split('_')[-1]))
         
+
         # 创建合并文件的列表
         concat_file = speaker_audio_dir / f"{speaker}_concat.txt"
-        merged_file = speaker_audio_dir / f"{speaker}_extracted.wav"
+        merged_file = speaker_audio_dir / f"{speaker}_extracted.mp3"
         
         # 写入concat文件
         with open(concat_file, 'w') as f:
             for seg_file in segment_files:
                 f.write(f"file '{seg_file.as_posix()}'\n")
         
-        # 使用ffmpeg合并音频文件
-        tools.runffmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', concat_file.as_posix(), '-c', 'copy', merged_file.as_posix()])
+        # 使用ffmpeg合并音频文件并转换为MP3格式
+        tools.runffmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', concat_file.as_posix(), '-f', 'mp3', '-ab', '64k', merged_file.as_posix()])
         
         # 删除concat文件
         try:
@@ -969,14 +1319,26 @@ def vm_preview_merged_audio():
         if not speaker_audio_dir.exists():
             return jsonify({"code": 1, "msg": "说话人音频目录不存在"}), 400
         
+
+        # 获取说话人的所有音频片段文件
+        all_segment_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.mp3"))
+        if not all_segment_files:
+            return jsonify({"code": 1, "msg": f"未找到说话人 {speaker} 的音频片段"}), 400
+        
         # 获取选定的片段文件
         segment_files = []
-        for index in segments:
-            seg_file = speaker_audio_dir / f"{speaker}_seg_{index}.wav"
-            if seg_file.exists():
-                segment_files.append(seg_file)
-            else:
-                return jsonify({"code": 1, "msg": f"未找到片段 {index}"}), 400
+        if segments:
+            # 根据索引过滤片段
+            for index in segments:
+                # 查找匹配索引的文件
+                matched_files = [f for f in all_segment_files if f.name == f"{speaker}_seg_{index}.mp3"]
+                if matched_files:
+                    segment_files.append(matched_files[0])
+                else:
+                    return jsonify({"code": 1, "msg": f"未找到片段 {index}"}), 400
+        else:
+            # 如果没有指定片段，则使用所有片段
+            segment_files = all_segment_files
         
         if not segment_files:
             return jsonify({"code": 1, "msg": "未选择任何音频片段"}), 400
@@ -984,17 +1346,18 @@ def vm_preview_merged_audio():
         # 按照索引排序
         segment_files.sort(key=lambda x: int(x.stem.split('_')[-1]))
         
+
         # 创建合并文件的列表
         concat_file = speaker_audio_dir / f"{speaker}_preview_concat_{uuid.uuid4().hex[:8]}.txt"
-        preview_file = speaker_audio_dir / f"{speaker}_preview_{uuid.uuid4().hex[:8]}.wav"
+        preview_file = speaker_audio_dir / f"{speaker}_preview_{uuid.uuid4().hex[:8]}.mp3"
         
         # 写入concat文件
         with open(concat_file, 'w') as f:
             for seg_file in segment_files:
                 f.write(f"file '{seg_file.as_posix()}'\n")
         
-        # 使用ffmpeg合并音频文件
-        tools.runffmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', concat_file.as_posix(), '-c', 'copy', preview_file.as_posix()])
+        # 使用ffmpeg合并音频文件并转换为MP3格式
+        tools.runffmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', concat_file.as_posix(), '-f', 'mp3', '-ab', '64k', preview_file.as_posix()])
         
         # 删除concat文件
         try:
@@ -1010,3 +1373,76 @@ def vm_preview_merged_audio():
         
     except Exception as e:
         return jsonify({"code": 1, "msg": f"生成预览音频异常: {str(e)}"}), 500
+
+
+@voice_bp.route('/upload_speaker_audio', methods=['POST'])
+def vm_upload_speaker_audio():
+    task_id = (request.args.get('task_id') or '').strip()
+    
+    try:
+        # 获取上传的文件
+        audio_file = request.files.get('audio')
+        speaker = request.form.get('speaker', '').strip()
+        
+        if not audio_file:
+            return jsonify({"code": 1, "msg": "未找到上传的音频文件"}), 400
+        
+        if not speaker:
+            return jsonify({"code": 1, "msg": "缺少说话人参数"}), 400
+        
+        # 获取任务目录
+        task_dir = Path(config.ROOT_DIR) / 'apidata' / task_id
+        if not task_dir.exists():
+            return jsonify({"code": 1, "msg": "任务目录不存在"}), 400
+        
+        # 创建说话人音频目录
+        speaker_audio_dir = task_dir / 'speaker_audio'
+        speaker_audio_dir.mkdir(exist_ok=True)
+        
+
+        # 获取说话人现有的音频片段数量，确定新文件的索引
+        existing_files = list(speaker_audio_dir.glob(f"{speaker}_seg_*.mp3"))
+        next_index = len(existing_files)
+        
+
+        # 生成文件名
+        filename = f"{speaker}_seg_{next_index}.mp3"
+        file_path = speaker_audio_dir / filename
+        
+        # 保存上传的文件
+        audio_file.save(file_path.as_posix())
+        
+        # 检查文件是否为MP3格式，如果不是则转换
+        import subprocess
+        try:
+            # 检查文件格式
+            result = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_name', '-of', 'default=noprint_wrappers=1:nokey=1', file_path.as_posix()], capture_output=True, text=True)
+            if result.returncode != 0:
+                # 文件可能不是有效的音频文件，尝试转换
+                converted_path = speaker_audio_dir / f"{speaker}_seg_{next_index}_converted.mp3"
+                tools.runffmpeg(['-y', '-i', file_path.as_posix(), '-f', 'mp3', '-ab', '64k', converted_path.as_posix()])
+                # 删除原始文件
+                file_path.unlink()
+                # 重命名转换后的文件
+                converted_path.rename(file_path)
+            else:
+                # 文件是有效的音频文件，检查是否需要转换为MP3
+                codec = result.stdout.strip()
+                if codec != 'mp3':
+                    # 转换为MP3格式
+                    converted_path = speaker_audio_dir / f"{speaker}_seg_{next_index}_converted.mp3"
+                    tools.runffmpeg(['-y', '-i', file_path.as_posix(), '-f', 'mp3', '-ab', '64k', converted_path.as_posix()])
+                    # 删除原始文件
+                    file_path.unlink()
+                    # 重命名转换后的文件
+                    converted_path.rename(file_path)
+        except Exception as e:
+            # 转换失败，删除文件
+            if file_path.exists():
+                file_path.unlink()
+            return jsonify({"code": 1, "msg": f"音频文件处理失败: {str(e)}"}), 500
+        
+        return jsonify({"code": 0, "msg": "音频上传成功", "file_path": f"/apidata/{task_id}/speaker_audio/{filename}"})
+        
+    except Exception as e:
+        return jsonify({"code": 1, "msg": f"上传异常: {str(e)}"}), 500

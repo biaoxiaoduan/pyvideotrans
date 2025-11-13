@@ -1105,9 +1105,10 @@ if __name__ == '__main__':
                     <button id=\"btnTranslateSubtitle\" style=\"padding:6px 12px; border:1px solid #9c27b0; background:#9c27b0; color:#fff; border-radius:6px; cursor:pointer;\">1.翻译字幕</button>
                     <button id=\"btnSaveTranslation\" style=\"padding:6px 12px; border:1px solid #17a2b8; background:#17a2b8; color:#fff; border-radius:6px; cursor:pointer; display:none;\">保存翻译</button>
                     <button id=\"btnVoiceClone\" style=\"padding:6px 12px; border:1px solid #e91e63; background:#e91e63; color:#fff; border-radius:6px; cursor:pointer;\">语音克隆</button>
-                    <button id=\"btnSelectVoice\" style=\"padding:6px 12px; border:1px solid #673ab7; background:#673ab7; color:#fff; border-radius:6px; cursor:pointer;\">选择自带音色</button>
+                    <button id=\"btnSelectVoice\" style=\"padding:6px 12px; border:1px solid #673ab7; background:#673ab7; color:#fff; border-radius:6px; cursor:pointer;\">选择音色</button>
                     <button id=\"btnSynthesizeVideo\" style=\"padding:6px 12px; border:1px solid #ff6b35; background:#ff6b35; color:#fff; border-radius:6px; cursor:pointer;\">合成视频</button>
                     <button id=\"btnAddSubtitles\" style=\"padding:6px 12px; border:1px solid #007AFF; background:#007AFF; color:#fff; border-radius:6px; cursor:pointer;\">添加字幕</button>
+                    <button id=\"btnDownloadResult\" style=\"padding:6px 12px; border:1px solid #28a745; background:#28a745; color:#fff; border-radius:6px; cursor:pointer; display:none;\">下载作品</button>
                 </div>
             </header>
             <div class=\"container\"> 
@@ -3818,6 +3819,96 @@ if __name__ == '__main__':
             btnTranslateSubtitle.addEventListener('click', onTranslateSubtitle);
             btnSaveTranslation.addEventListener('click', onSaveTranslation);
             btnVoiceClone.addEventListener('click', onVoiceClone);
+            // 检查结果视频是否存在，如果存在则显示下载按钮
+            async function checkResultVideo() {
+                try {
+                    const response = await fetch(`/viewer_api/${taskId}/check_result_video`);
+                    const data = await response.json();
+                    const btnDownloadResult = document.getElementById('btnDownloadResult');
+                    if (data.code === 0 && data.exists && btnDownloadResult) {
+                        btnDownloadResult.style.display = 'inline-block';
+                        btnDownloadResult.setAttribute('data-download-url', data.download_url);
+                        
+                        // 为下载按钮添加点击事件
+                        btnDownloadResult.onclick = function() {
+                            const downloadUrl = this.getAttribute('data-download-url');
+                            console.log(downloadUrl);
+                            if (downloadUrl) {
+                                // 创建模态对话框
+                                const modal = document.createElement('div');
+                                modal.style.cssText = `
+                                    position: fixed;
+                                    top: 0;
+                                    left: 0;
+                                    width: 100%;
+                                    height: 100%;
+                                    background: rgba(0,0,0,0.8);
+                                    display: flex;
+                                    justify-content: center;
+                                    align-items: center;
+                                    z-index: 10000;
+                                `;
+                                
+                                const modalContent = document.createElement('div');
+                                modalContent.style.cssText = `
+                                    background: #fff;
+                                    padding: 20px;
+                                    border-radius: 8px;
+                                    max-width: 800px;
+                                    width: 90%;
+                                    max-height: 90vh;
+                                    overflow: hidden;
+                                `;
+                                
+                                const closeBtn = document.createElement('button');
+                                closeBtn.textContent = '关闭';
+                                closeBtn.style.cssText = `
+                                    position: absolute;
+                                    top: 10px;
+                                    right: 10px;
+                                    background: #ff4444;
+                                    color: white;
+                                    border: none;
+                                    padding: 5px 10px;
+                                    border-radius: 4px;
+                                    cursor: pointer;
+                                `;
+                                
+                                const videoPlayer = document.createElement('video');
+                                videoPlayer.src = downloadUrl;
+                                videoPlayer.controls = true;
+                                videoPlayer.style.cssText = `
+                                    width: 100%;
+                                    max-height: 70vh;
+                                `;
+                                
+                                modalContent.appendChild(closeBtn);
+                                modalContent.appendChild(videoPlayer);
+                                modal.appendChild(modalContent);
+                                document.body.appendChild(modal);
+                                
+                                // 关闭模态框事件
+                                closeBtn.onclick = function() {
+                                    document.body.removeChild(modal);
+                                };
+                                
+                                // 点击模态框外部关闭
+                                modal.onclick = function(event) {
+                                    if (event.target === modal) {
+                                        document.body.removeChild(modal);
+                                    }
+                                };
+                            }
+                        };
+                    }
+                } catch (error) {
+                    console.log('检查结果视频时出错:', error);
+                }
+            }
+            
+            // 页面加载完成后检查结果视频
+            window.addEventListener('load', checkResultVideo);
+
             btnSelectVoice.addEventListener('click', onSelectVoice);
             btnSynthesizeVideo.addEventListener('click', onSynthesizeVideo);
             btnAddSubtitles.addEventListener('click', onAddSubtitles);
@@ -6296,6 +6387,45 @@ if __name__ == '__main__':
             return jsonify({"code": 0, "files": files})
         except Exception as e:
             return jsonify({"code": 1, "msg": f"读取失败: {e}"}), 500
+
+    @app.route('/viewer_api/<task_id>/check_result_video', methods=['GET'])
+    def viewer_check_result_video(task_id):
+        """检查结果视频文件是否存在"""
+        try:
+            # 首先检查任务目录下是否有result.mp4
+            task_dir = Path(TARGET_DIR) / task_id
+            result_video = task_dir / "result.mp4"
+            
+            if result_video.exists():
+                return jsonify({
+                    "code": 0,
+                    "exists": True,
+                    "download_url": f'/{API_RESOURCE}/{task_id}/result.mp4'
+                })
+            
+            # 如果没有找到，搜索所有以task_id开头的目录
+            base_dir = Path(TARGET_DIR)
+            for item in base_dir.iterdir():
+                if item.is_dir() and item.name.startswith(f"synthesis_{task_id}"):
+                    result_video = item / "result.mp4"
+                    if result_video.exists():
+                        # 提取完整的目录名作为新的task_id
+                        synthesis_task_id = item.name
+                        return jsonify({
+                            "code": 0,
+                            "exists": True,
+                            "download_url": f'/{API_RESOURCE}/{synthesis_task_id}/result.mp4'
+                        })
+            
+            return jsonify({
+                "code": 0,
+                "exists": False
+            })
+        except Exception as e:
+            return jsonify({
+                "code": 1,
+                "msg": f"检查失败: {str(e)}"
+            })
 
     @app.route('/viewer_api/<task_id>/list_srts', methods=['GET'])
     def viewer_list_srts(task_id):
