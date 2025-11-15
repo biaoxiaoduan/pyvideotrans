@@ -1691,9 +1691,9 @@ if __name__ == '__main__':
             let panOffset = 0; // 水平偏移
 
             // 计算允许的最大缩放倍数：
-            // 目标是在最大放大时，可视时间范围约为 12 秒（刻度间隔约 1 秒）
+            // 目标是在最大放大时，可视时间范围约为 4 秒
             function getMaxZoomLevel() {
-                const minVisibleDuration = 12000; // 毫秒，对应 12 个 1 秒刻度
+                const minVisibleDuration = 4000; // 毫秒
                 if (!videoMs || videoMs <= 0) return 10;
                 return Math.max(1, videoMs / minVisibleDuration);
             }
