@@ -2168,7 +2168,6 @@ if __name__ == '__main__':
 
             // 鼠标按下事件
             canvas.addEventListener('mousedown', (e) => {
-                console.log('mousedown event');
                 const rect = canvas.getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
@@ -2209,7 +2208,6 @@ if __name__ == '__main__':
 
             // 鼠标移动事件
             canvas.addEventListener('mousemove', (e) => {
-                console.log('mousemove event');
                 const rect = canvas.getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
@@ -2275,7 +2273,6 @@ if __name__ == '__main__':
 
             // 鼠标释放事件
             canvas.addEventListener('mouseup', (e) => {
-                console.log('mouseup event');
                 if (isDragging) {
                     // 拖拽结束后立即保存字幕到文件
                     if (dragCueIndex >= 0) {
@@ -2292,7 +2289,6 @@ if __name__ == '__main__':
 
             // 鼠标离开事件
             canvas.addEventListener('mouseleave', (e) => {
-                console.log('mouseleave event');
                 if (isDragging) {
                     // 拖拽中离开画布时也立即保存一次
                     if (dragCueIndex >= 0) {
