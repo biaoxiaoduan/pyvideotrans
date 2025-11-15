@@ -1690,6 +1690,14 @@ if __name__ == '__main__':
             let zoomLevel = 1;
             let panOffset = 0; // 水平偏移
 
+            // 计算允许的最大缩放倍数：
+            // 目标是在最大放大时，可视时间范围约为 12 秒（刻度间隔约 1 秒）
+            function getMaxZoomLevel() {
+                const minVisibleDuration = 12000; // 毫秒，对应 12 个 1 秒刻度
+                if (!videoMs || videoMs <= 0) return 10;
+                return Math.max(1, videoMs / minVisibleDuration);
+            }
+
             // 更新说话人图例（已禁用）
             function updateSpeakerLegend() { /* no-op: legend removed */ }
 
@@ -1727,9 +1735,9 @@ if __name__ == '__main__':
                 ctx.lineTo(canvas.width - pad, scaleH);
                 ctx.stroke();
 
-                // 计算刻度间隔（更密集一些，目标大约 12 个刻度）
+                // 计算刻度间隔（目标大约 12 个刻度，最小 1 秒）
                 const rawInterval = visibleDuration / 12;
-                const stepCandidates = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 30000, 60000]; // 毫秒
+                const stepCandidates = [1000, 2000, 5000, 10000, 30000, 60000, 300000, 600000]; // 毫秒
                 let tickInterval = 1000;
                 for (let i = 0; i < stepCandidates.length; i++) {
                     if (stepCandidates[i] >= rawInterval) {
@@ -2318,8 +2326,10 @@ if __name__ == '__main__':
                     
                     // 缩放速度稍微放慢：每次滚动缩放比例更接近 1
                     const zoomFactor = e.deltaY > 0 ? 1.05 : 0.95;
-                    // 限制最小缩放为 1，避免时间轴比窗口还小
-                    const newZoomLevel = Math.max(1, Math.min(10, zoomLevel * zoomFactor));
+                    // 限制缩放范围：[1, getMaxZoomLevel()]，
+                    // 最小不小于 1，最大保证可视范围约 12 秒（刻度间隔约 1 秒）
+                    const maxZoom = getMaxZoomLevel();
+                    const newZoomLevel = Math.max(1, Math.min(maxZoom, zoomLevel * zoomFactor));
                     
                     // 以鼠标位置为中心进行缩放
                     const zoomRatio = newZoomLevel / zoomLevel;
@@ -2378,7 +2388,8 @@ if __name__ == '__main__':
 
             // 缩放控制按钮事件
             zoomInBtn.addEventListener('click', () => {
-                const newZoomLevel = Math.min(10, zoomLevel * 1.25);
+                const maxZoom = getMaxZoomLevel();
+                const newZoomLevel = Math.min(maxZoom, zoomLevel * 1.25);
                 zoomLevel = newZoomLevel;
                 drawTimeline(videoEl.currentTime * 1000);
             });
