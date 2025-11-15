@@ -1709,22 +1709,48 @@ if __name__ == '__main__':
                 ctx.fillStyle = '#fafafa';
                 ctx.fillRect(0,0,canvas.width,canvas.height);
                 
-                const pad = 8; const barH = 24; const top = (canvas.height - barH)/2;
+                const pad = 8; 
+                const barH = 24; 
+                const scaleH = 16; // 顶部时间刻度区域高度
+                const top = (canvas.height - barH)/2;
                 
                 // 计算可见时间范围
                 const visibleDuration = videoMs / zoomLevel;
                 const startTime = Math.max(0, panOffset);
                 const endTime = Math.min(videoMs, startTime + visibleDuration);
                 
-                // 绘制时间刻度
-                ctx.fillStyle = '#ddd';
+                // 顶部时间刻度轴
+                ctx.strokeStyle = '#ccc';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(pad, scaleH);
+                ctx.lineTo(canvas.width - pad, scaleH);
+                ctx.stroke();
+
+                // 计算刻度间隔（更密集一些，目标大约 12 个刻度）
+                const rawInterval = visibleDuration / 12;
+                const stepCandidates = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 30000, 60000]; // 毫秒
+                let tickInterval = 1000;
+                for (let i = 0; i < stepCandidates.length; i++) {
+                    if (stepCandidates[i] >= rawInterval) {
+                        tickInterval = stepCandidates[i];
+                        break;
+                    }
+                }
+
+                // 刻度文字颜色稍微深一点，更显眼
+                ctx.fillStyle = '#444';
                 ctx.font = '10px Arial';
-                ctx.textAlign = 'left';
-                const tickInterval = Math.max(1000, Math.floor(visibleDuration / 10)); // 至少1秒间隔
+                ctx.textAlign = 'center';
                 for (let time = Math.ceil(startTime / tickInterval) * tickInterval; time <= endTime; time += tickInterval) {
                     const x = pad + ((time - startTime) / visibleDuration) * (canvas.width - 2*pad);
-                    ctx.fillRect(x, top + barH + 2, 1, 8);
-                    ctx.fillText(fmtMs(time), x + 2, top + barH + 12);
+                    // 主刻度线
+                    ctx.beginPath();
+                    ctx.moveTo(x, scaleH - 4);
+                    ctx.lineTo(x, scaleH + 4);
+                    ctx.stroke();
+                    // 时间标签
+                    ctx.fillText(fmtMs(time), x, scaleH - 6);
                 }
                 
                 cues.forEach((c, i) => {
@@ -2142,6 +2168,7 @@ if __name__ == '__main__':
 
             // 鼠标按下事件
             canvas.addEventListener('mousedown', (e) => {
+                console.log('mousedown event');
                 const rect = canvas.getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
@@ -2182,6 +2209,7 @@ if __name__ == '__main__':
 
             // 鼠标移动事件
             canvas.addEventListener('mousemove', (e) => {
+                console.log('mousemove event');
                 const rect = canvas.getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
@@ -2247,6 +2275,7 @@ if __name__ == '__main__':
 
             // 鼠标释放事件
             canvas.addEventListener('mouseup', (e) => {
+                console.log('mouseup event');
                 if (isDragging) {
                     // 拖拽结束后立即保存字幕到文件
                     if (dragCueIndex >= 0) {
@@ -2263,6 +2292,7 @@ if __name__ == '__main__':
 
             // 鼠标离开事件
             canvas.addEventListener('mouseleave', (e) => {
+                console.log('mouseleave event');
                 if (isDragging) {
                     // 拖拽中离开画布时也立即保存一次
                     if (dragCueIndex >= 0) {
@@ -2277,24 +2307,42 @@ if __name__ == '__main__':
                 hideDragHint();
             });
 
-            // 滚轮缩放事件
+            // 滚轮事件：根据滚动方向选择缩放或平移
             canvas.addEventListener('wheel', (e) => {
                 e.preventDefault();
-                
-                const rect = canvas.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const mouseTime = screenToTime(x);
-                
-                const zoomFactor = e.deltaY > 0 ? 0.8 : 1.25;
-                const newZoomLevel = Math.max(0.1, Math.min(10, zoomLevel * zoomFactor));
-                
-                // 以鼠标位置为中心进行缩放
-                const zoomRatio = newZoomLevel / zoomLevel;
-                const newPanOffset = mouseTime - (mouseTime - panOffset) * zoomRatio;
-                
-                zoomLevel = newZoomLevel;
-                panOffset = Math.max(0, Math.min(videoMs - videoMs / zoomLevel, newPanOffset));
-                
+
+                const absX = Math.abs(e.deltaX);
+                const absY = Math.abs(e.deltaY);
+
+                // 情况 1：垂直滚动更明显 => 执行缩放（原始缩放逻辑）
+                if (absY > absX) {
+                    const rect = canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const mouseTime = screenToTime(x);
+                    
+                    // 缩放速度稍微放慢：每次滚动缩放比例更接近 1
+                    const zoomFactor = e.deltaY > 0 ? 1.05 : 0.95;
+                    // 限制最小缩放为 1，避免时间轴比窗口还小
+                    const newZoomLevel = Math.max(1, Math.min(10, zoomLevel * zoomFactor));
+                    
+                    // 以鼠标位置为中心进行缩放
+                    const zoomRatio = newZoomLevel / zoomLevel;
+                    const newPanOffset = mouseTime - (mouseTime - panOffset) * zoomRatio;
+                    
+                    zoomLevel = newZoomLevel;
+                    panOffset = Math.max(0, Math.min(videoMs - videoMs / zoomLevel, newPanOffset));
+                }
+                // 情况 2：水平滚动更明显 => 执行时间轴平移（参考 mousemove 中的平移公式）
+                else if (absX > absY) {
+                    const visibleDuration = videoMs / zoomLevel;
+                    const effectiveWidth = Math.max(1, canvas.width - 16); // 避免除 0
+                    const deltaTime = (e.deltaX / effectiveWidth) * visibleDuration;
+                    const newPanOffset = panOffset + deltaTime;
+                    
+                    const maxPanOffset = Math.max(0, videoMs - visibleDuration);
+                    panOffset = Math.max(0, Math.min(maxPanOffset, newPanOffset));
+                }
+
                 drawTimeline(videoEl.currentTime * 1000);
             });
 
@@ -2340,7 +2388,8 @@ if __name__ == '__main__':
             });
 
             zoomOutBtn.addEventListener('click', () => {
-                const newZoomLevel = Math.max(0.1, zoomLevel * 0.8);
+                // 限制最小缩放系数为 1，避免时间轴比窗口短
+                const newZoomLevel = Math.max(1, zoomLevel * 0.8);
                 zoomLevel = newZoomLevel;
                 drawTimeline(videoEl.currentTime * 1000);
             });
