@@ -4437,6 +4437,7 @@ if __name__ == '__main__':
                 translate_type = data.get('translate_type', 0)  # 默认使用Google翻译
                 
                 # 准备翻译数据 - 翻译器期望的是包含字典的列表，每个字典有text字段
+                # 注意：字幕中可能存在空文本行，不能简单按下标一一对应，否则会导致翻译结果与行号错位
                 text_list = []
                 for subtitle in subtitles:
                     text = subtitle.get('text', '').strip()
@@ -4464,16 +4465,22 @@ if __name__ == '__main__':
                 if not translated_texts:
                     return jsonify({"code": 1, "msg": "翻译失败"}), 500
                 
-                # 翻译器返回的是修改后的text_list，每个元素包含翻译后的text字段
-                # 构建返回结果
+                # 翻译器返回的是修改后的 text_list，每个元素包含翻译后的 text 字段
+                # 这里需要按“非空字幕行”的顺序依次回填，避免因为空行导致翻译结果与行号错位
                 translated_subtitles = []
-                for i, subtitle in enumerate(subtitles):
+                translated_index = 0
+                for subtitle in subtitles:
                     translated_subtitle = subtitle.copy()
-                    # 从翻译结果中获取对应的翻译文本
-                    if i < len(translated_texts) and isinstance(translated_texts[i], dict):
-                        translated_subtitle['text'] = translated_texts[i].get('text', subtitle['text'])
+                    original_text = (subtitle.get('text') or '').strip()
+                    if original_text:
+                        if translated_index < len(translated_texts) and isinstance(translated_texts[translated_index], dict):
+                            translated_subtitle['text'] = translated_texts[translated_index].get('text', subtitle.get('text', ''))
+                        else:
+                            translated_subtitle['text'] = subtitle.get('text', '')
+                        translated_index += 1
                     else:
-                        translated_subtitle['text'] = subtitle['text']
+                        # 对于原本就是空文本的字幕行，保持为空，避免错位
+                        translated_subtitle['text'] = subtitle.get('text', '')
                     translated_subtitles.append(translated_subtitle)
                 
                 # 生成带语言后缀的SRT文件
