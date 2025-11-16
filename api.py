@@ -2325,7 +2325,7 @@ if __name__ == '__main__':
                     const mouseTime = screenToTime(x);
                     
                     // 缩放速度稍微放慢：每次滚动缩放比例更接近 1
-                    const zoomFactor = e.deltaY > 0 ? 1.05 : 0.95;
+                    const zoomFactor = e.deltaY > 0 ? 0.95 : 1.05;
                     // 限制缩放范围：[1, getMaxZoomLevel()]，
                     // 最小不小于 1，最大保证可视范围约 12 秒（刻度间隔约 1 秒）
                     const maxZoom = getMaxZoomLevel();
