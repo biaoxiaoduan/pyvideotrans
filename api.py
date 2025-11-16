@@ -1126,7 +1126,16 @@ if __name__ == '__main__':
                     <div class=\"list\" id=\"subList\"></div>
                 </div>
                 <div class=\"player\"> 
-                    <div id=\"mediaInfo\" style=\"font-size:12px;color:#666;margin-bottom:4px;\"></div>
+                    <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;\">
+                        <div id=\"mediaInfo\" style=\"font-size:12px;color:#666;\"></div>
+                        <div style=\"font-size:12px;color:#666;\">
+                            播放源：
+                            <select id=\"videoSourceSelect\" style=\"padding:2px 6px;font-size:12px;\">
+                                <option value=\"original\">原视频</option>
+                                <option value=\"result\" disabled>结果视频</option>
+                            </select>
+                        </div>
+                    </div>
                     <video id=\"video\" controls crossorigin=\"anonymous\" style=\"width:100%;max-height:60vh;background:#000\"></video>
                     <div class=\"timeline-wrap\" style=\"position: relative;\">
                         <div style=\"display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;\">
@@ -1180,6 +1189,7 @@ if __name__ == '__main__':
             const visibleRangeEl = document.getElementById('visibleRange');
             const saveStatusEl = document.getElementById('saveStatus');
             const speakerLegendEl = document.getElementById('speakerLegend'); // 图例已隐藏
+            const videoSourceSelect = document.getElementById('videoSourceSelect');
             const zoomInBtn = document.getElementById('zoomIn');
             const zoomOutBtn = document.getElementById('zoomOut');
             const zoomResetBtn = document.getElementById('zoomReset');
@@ -1191,6 +1201,7 @@ if __name__ == '__main__':
             let speakers = [];
             let speakerColors = {}; // 存储说话人对应的颜色
             const originalVideoUrl = '((VIDEO_URL))';
+            let resultVideoUrl = null;
             // 语言切换全局挂载，确保任何时机可用
             window.langSwitcher = document.getElementById('langSwitcher');
             if (!window.availableLangs) window.availableLangs = [];
@@ -1201,6 +1212,29 @@ if __name__ == '__main__':
             // 前端缓存语音映射（用于计算缓存文件名）
             window.voiceMapping = {};
             let voiceMapLoading = false; let voiceMapLoaded = false;
+
+            // 初始化视频播放源
+            if (originalVideoUrl && videoEl) {
+                videoEl.src = originalVideoUrl;
+            }
+            if (videoSourceSelect) {
+                videoSourceSelect.addEventListener('change', function () {
+                    if (!videoEl) return;
+                    if (this.value === 'original') {
+                        if (originalVideoUrl) {
+                            videoEl.src = originalVideoUrl;
+                        }
+                    } else if (this.value === 'result') {
+                        if (resultVideoUrl) {
+                            videoEl.src = resultVideoUrl;
+                        } else if (originalVideoUrl) {
+                            // 若没有结果视频地址则回退到原视频
+                            videoEl.src = originalVideoUrl;
+                            this.value = 'original';
+                        }
+                    }
+                });
+            }
             async function loadVoiceMapping(){
                 if (voiceMapLoaded || voiceMapLoading) return;
                 voiceMapLoading = true;
@@ -3884,6 +3918,16 @@ if __name__ == '__main__':
                     if (data.code === 0 && data.exists && btnDownloadResult) {
                         btnDownloadResult.style.display = 'inline-block';
                         btnDownloadResult.setAttribute('data-download-url', data.download_url);
+                        // 缓存结果视频地址并启用下拉选项
+                        if (data.download_url) {
+                            resultVideoUrl = data.download_url;
+                            if (videoSourceSelect) {
+                                const resultOption = videoSourceSelect.querySelector('option[value=\"result\"]');
+                                if (resultOption) {
+                                    resultOption.disabled = false;
+                                }
+                            }
+                        }
                         
                         // 为下载按钮添加点击事件
                         btnDownloadResult.onclick = function() {
