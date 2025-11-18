@@ -432,6 +432,12 @@ if __name__ == '__main__':
             cfg["recogn_type"] = recognition.FASTER_WHISPER
             # Whisper 默认模型，可按需调整
             cfg["model_name"] = 'large-v2'
+            # 使用 Whisper 时关闭基于 ChatGPT 的 LLM 重新断句，避免触发外部 LLM 调用
+            try:
+                from videotrans.configure import config as _cfg_for_whisper
+                _cfg_for_whisper.settings['rephrase'] = False
+            except Exception:
+                pass
 
         # 输出与缓存目录
         obj = tools.format_video(tmp_path.as_posix(), None)
