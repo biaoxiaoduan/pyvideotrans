@@ -204,6 +204,7 @@ if __name__ == '__main__':
             <main>
                 <form id=\"funasrForm\" action=\"/funasr_run\" method=\"post\" enctype=\"multipart/form-data\">
                     <div class=\"row\"><label>视频文件: <input id=\"videoFile\" type=\"file\" name=\"video\" accept=\"video/*,audio/*\" required></label></div>
+                    <div class=\"row\"><label><input type=\"checkbox\" name=\"use_funasr\" checked> 使用 FunASR（适合中文）</label><span class=\"hint\">取消勾选将使用 Whisper，更适合多语言</span></div>
                     <div class=\"row\"><label><input type=\"checkbox\" name=\"enable_spk\" checked> 启用说话人识别</label></div>
                     <div class=\"row\"><button id=\"btnSubmit\" type=\"submit\">开始识别</button></div>
                 </form>
@@ -415,7 +416,7 @@ if __name__ == '__main__':
         tmp_path = Path(config.TEMP_DIR) / tmp_name
         file.save(tmp_path.as_posix())
 
-        # 识别配置（FunASR）
+        # 识别配置（默认 FunASR，可切换为 Whisper）
         from videotrans import recognition
         cfg = {
             "recogn_type": recognition.FUNASR_CN,
@@ -424,6 +425,13 @@ if __name__ == '__main__':
             "is_cuda": False,
             "detect_language": 'auto'
         }
+
+        # 根据前端勾选决定使用 FunASR 还是 Whisper
+        use_funasr = request.form.get('use_funasr') is not None
+        if not use_funasr:
+            cfg["recogn_type"] = recognition.FASTER_WHISPER
+            # Whisper 默认模型，可按需调整
+            cfg["model_name"] = 'large-v2'
 
         # 输出与缓存目录
         obj = tools.format_video(tmp_path.as_posix(), None)
@@ -3009,10 +3017,10 @@ if __name__ == '__main__':
                     
                     // 创建语言选择对话框
                     const languageOptions = [
+                        { code: 'zh-cn', name: '翻译成中文' },
                         { code: 'en', name: '英语' },
                         { code: 'fr', name: '法语' },
                         { code: 'ja', name: '日语' },
-                        { code: 'zh-cn', name: '汉语' },
                         { code: 'es', name: '西班牙语' },
                         { code: 'pt', name: '葡萄牙语' },
                         { code: 'th', name: '泰语' },
@@ -3192,6 +3200,10 @@ if __name__ == '__main__':
                                         console.warn('自动保存翻译异常', err);
                                     }
                                     alert(`翻译完成！已生成并保存翻译文件：${data.srt_file}。`);
+                                    try {
+                                        // 翻译与保存完成后自动刷新当前页面，确保所有状态同步
+                                        location.reload();
+                                    } catch (_) {}
                                 } else {
                                     alert('翻译失败：没有返回翻译结果');
                                 }
